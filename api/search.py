@@ -4,8 +4,8 @@ POST /api/search  {"query": "...", "history": [{"role","content"}...], "model": 
 ->  {"answer", "sql", "reason", "rows", "columns", "model_used"}   or   {"error": "..."}
 
 Stdlib only (urllib instead of requests) to keep the function bundle tiny.
-The 500k-row CSV ships with the deployment and is loaded into in-memory
-SQLite on each invocation.
+The 10k-row CSV ships with the deployment and is loaded into in-memory
+SQLite on each invocation (~75 ms).
 """
 
 import csv
@@ -47,7 +47,7 @@ Columns:
 - account_id (INTEGER) - the original account number from the source system
 - account_name (TEXT) - the company / account name
 
-There are 500,000 rows total. Every column is exact as imported from a real CRM
+There are 10,000 rows total. Every column is exact as imported from a real CRM
 export; there are no other fields (no dates, costs, or categories) - all
 matching must be done on account_id and account_name.
 """

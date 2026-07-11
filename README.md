@@ -1,12 +1,11 @@
-# AccountSearch AI — 500k
+# AccountSearch AI — Pro
 
-Natural-language chat search over a 500,000-row accounts dataset, deployed on
-Vercel. Based on the Pro variant, scaled from 10k to 500k records: the
-original 10,000 real CRM rows plus 490,000 synthetic accounts generated from
-the same name vocabulary and patterns.
+Natural-language chat search over a 10,000-row accounts dataset, deployed on
+Vercel. This is the **paid-model tier**: responses in ~2–5 seconds, no daily
+request cap, pay-per-token via OpenRouter.
 
-(The free-tier 10k variant lives in `AiSearchTravel`; the paid-tier 10k
-variant lives in `AiSearchTravel-Pro`.)
+(The free-tier variant lives in a separate repo, `AiSearchTravel` — same app,
+free models, ~20–45s responses, ~25 searches/day.)
 
 ## Cost
 
