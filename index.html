@@ -59,12 +59,31 @@
   }
   form.inputbar .inner {
     max-width: 820px; margin: 0 auto; display: flex; gap: 10px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; position: relative;
   }
   form.inputbar .inner:focus-within { border-color: var(--accent); }
+  .inputwrap { flex: 1; position: relative; display: flex; }
   form.inputbar input {
-    flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 15.5px;
+    flex: 1; background: transparent; border: none; outline: none; color: var(--text);
+    font-size: 15.5px; padding: 0; position: relative; z-index: 1;
   }
+  #ghost {
+    position: absolute; inset: 0; display: flex; align-items: center; pointer-events: none;
+    font-size: 15.5px; white-space: pre; overflow: hidden;
+  }
+  #ghost .typed { visibility: hidden; }
+  #ghost .rest { color: var(--muted); opacity: .55; }
+  #sugbox {
+    position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; display: none;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; z-index: 6; box-shadow: 0 -6px 24px rgba(0,0,0,.35);
+  }
+  #sugbox button {
+    display: block; width: 100%; text-align: left; padding: 9px 14px; background: none;
+    border: none; border-radius: 0; color: var(--text); font-size: 14px; cursor: pointer;
+  }
+  #sugbox button .hint { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  #sugbox button.active, #sugbox button:hover { background: var(--panel2); }
   form.inputbar button {
     background: var(--accent); color: #fff; border: none; border-radius: 10px;
     padding: 8px 16px; font-size: 15px; cursor: pointer;
@@ -86,10 +105,14 @@
 
 <form class="inputbar" id="form">
   <div class="inner">
-    <input id="input" placeholder="Ask about accounts…" autocomplete="off">
+    <div id="sugbox"></div>
+    <div class="inputwrap">
+      <div id="ghost"><span class="typed"></span><span class="rest"></span></div>
+      <input id="input" placeholder="Ask about accounts…" autocomplete="off" spellcheck="false">
+    </div>
     <button id="send" type="submit">Send</button>
   </div>
-  <div class="note">Answers come only from the 10,000-row dataset.</div>
+  <div class="note">Answers come only from the 10,000-row dataset. Tab accepts the inline suggestion.</div>
 </form>
 
 <script>
@@ -195,11 +218,106 @@ function addResults(body, data) {
   }
 }
 
+// ---------- type-ahead: suggestions + inline ghost auto-correct ----------
+const ghostTyped = document.querySelector("#ghost .typed");
+const ghostRest = document.querySelector("#ghost .rest");
+const sugbox = document.getElementById("sugbox");
+let NAMES = [];           // [{name, lower, words, skels}]
+let sugs = [], activeSug = -1;
+
+const skel = s => s.replace(/[aeiou]+/g, "");
+fetch("Accounts-VadlamudiRamesh.csv").then(r => r.text()).then(t => {
+  NAMES = t.split(/\r?\n/).map(line => {
+    const m = line.replace(/^﻿/, "").match(/^\d+,(?:"(.*)"|(.*))$/);
+    const name = m && (m[1] || m[2]);
+    if (!name) return null;
+    const lower = name.toLowerCase();
+    const words = lower.replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+    return {name, lower, words, skels: words.map(skel)};
+  }).filter(Boolean);
+}).catch(() => {});
+
+function tokenMatches(entry, tok) {
+  if (entry.lower.includes(tok)) return 1;                    // exact substring
+  const ts = skel(tok);
+  for (let i = 0; i < entry.words.length; i++) {              // typo: same consonant skeleton
+    if (entry.skels[i] === ts && entry.words[i][0] === tok[0]) return 2;
+  }
+  return 0;
+}
+
+function clearSuggest() {
+  ghostTyped.textContent = ""; ghostRest.textContent = "";
+  sugbox.style.display = "none"; sugbox.replaceChildren();
+  sugs = []; activeSug = -1;
+}
+
+function updateSuggest() {
+  clearSuggest();
+  const q = input.value;
+  const ql = q.toLowerCase().trim();
+  if (busy || ql.length < 2 || !NAMES.length) return;
+  const toks = ql.replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(t => t.length > 1);
+  if (!toks.length) return;
+  const out = [];
+  for (const entry of NAMES) {
+    let corrected = false, ok = true;
+    for (const tok of toks) {
+      const m = tokenMatches(entry, tok);
+      if (!m) { ok = false; break; }
+      if (m === 2) corrected = true;
+    }
+    if (!ok) continue;
+    out.push({entry, corrected, prefix: entry.lower.startsWith(ql)});
+    if (out.length > 300) break;
+  }
+  out.sort((a, b) => (b.prefix - a.prefix) || (a.corrected - b.corrected) || (a.entry.name.length - b.entry.name.length));
+  sugs = out.slice(0, 6);
+  if (!sugs.length) return;
+
+  const best = sugs.find(s => s.prefix);
+  if (best && q.length && !/\s$/.test(q)) {
+    ghostTyped.textContent = q;
+    ghostRest.textContent = best.entry.name.slice(q.length);
+  }
+  sugs.forEach((s, i) => {
+    const b = el("button", "", s.entry.name);
+    b.type = "button";
+    if (s.corrected) b.appendChild(el("span", "hint", "auto-corrected"));
+    b.onclick = () => { input.value = s.entry.name; clearSuggest(); input.focus(); };
+    sugbox.appendChild(b);
+  });
+  sugbox.style.display = "block";
+}
+
+function highlightSug() {
+  [...sugbox.children].forEach((b, i) => b.classList.toggle("active", i === activeSug));
+}
+
+input.addEventListener("input", updateSuggest);
+input.addEventListener("blur", () => setTimeout(clearSuggest, 150));
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && ghostRest.textContent) {
+    e.preventDefault();
+    input.value = input.value + ghostRest.textContent;
+    clearSuggest();
+  } else if (e.key === "ArrowDown" && sugs.length) {
+    e.preventDefault(); activeSug = (activeSug + 1) % sugs.length; highlightSug();
+  } else if (e.key === "ArrowUp" && sugs.length) {
+    e.preventDefault(); activeSug = (activeSug - 1 + sugs.length) % sugs.length; highlightSug();
+  } else if (e.key === "Enter" && activeSug >= 0) {
+    e.preventDefault(); input.value = sugs[activeSug].entry.name; clearSuggest();
+  } else if (e.key === "Escape") {
+    clearSuggest();
+  }
+});
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = input.value.trim();
   if (!q || busy) return;
   busy = true; send.disabled = true; input.value = "";
+  clearSuggest();
 
   renderMarkdown(addMsg("user"), q);
   history.push({role: "user", content: q});

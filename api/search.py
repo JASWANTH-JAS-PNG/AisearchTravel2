@@ -170,11 +170,16 @@ def _trigrams(s: str) -> set:
     return {padded[i:i + 3] for i in range(len(padded) - 2)}
 
 
+def _skeleton(token: str) -> str:
+    """Consonant skeleton: 'abndence' and 'abundance' both -> 'bndnc'."""
+    return re.sub(r"[aeiou]+", "", token)
+
+
 def _build_index():
     csv_path = next((p for p in CSV_CANDIDATES if p.exists()), None)
     if csv_path is None:
         raise FileNotFoundError("Accounts CSV not found in deployment bundle.")
-    entries, vocab = [], {}
+    entries, vocab, skeletons = [], {}, {}
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         for i, r in enumerate(csv.reader(f), start=1):
             if not r:
@@ -185,10 +190,11 @@ def _build_index():
             for tok in norm.split():
                 if len(tok) > 1:
                     vocab.setdefault(tok, _trigrams(tok))
-    return entries, vocab
+                    skeletons.setdefault(_skeleton(tok), set()).add(tok)
+    return entries, vocab, skeletons
 
 
-_ENTRIES, _VOCAB = _build_index()
+_ENTRIES, _VOCAB, _SKELETONS = _build_index()
 
 
 def _similar_tokens(token: str) -> set:
@@ -213,6 +219,11 @@ def _similar_tokens(token: str) -> set:
             out.add(best)
     elif best_score >= 0.55:  # unknown word: take the nearest correction
         out.add(best)
+    if token not in _VOCAB:
+        # consonant-skeleton match rescues typos trigrams miss ('abndence'->'abundance')
+        for cand in _SKELETONS.get(_skeleton(token), ()):
+            if cand[0] == token[0] and abs(len(cand) - len(token)) <= 3:
+                out.add(cand)
     return out
 
 
@@ -233,13 +244,14 @@ def instant_search(query: str) -> dict | None:
     # term groups: each query token expands to {itself, typo-correction, concept synonyms}
     groups = []
     for tok in tokens:
-        terms = {tok}
-        similar = _similar_tokens(tok)
-        terms.update(similar)
-        for t in [tok, *similar]:
-            terms.update(CONCEPT_MAP.get(t, []))
-        if terms not in groups:  # dedupe synonymous tokens (e.g. "law" + "legal")
-            groups.append(terms)
+        direct = {tok} | _similar_tokens(tok)
+        concept = set()
+        for t in direct:
+            concept.update(CONCEPT_MAP.get(t, []))
+        concept -= direct
+        group = {"direct": direct, "concept": concept}
+        if group not in groups:  # dedupe synonymous tokens (e.g. "law" + "legal")
+            groups.append(group)
 
     if not groups and numeric is None:
         return None
@@ -251,11 +263,16 @@ def instant_search(query: str) -> dict | None:
             if (account_id > num) != greater and account_id != num:
                 continue
         hit_groups, score = 0, 0.0
-        for terms in groups:
+        name_tokens = norm.split()
+        for group in groups:
             group_hit = 0.0
-            for term in terms:
+            for term in group["direct"]:
                 if term in norm:
-                    group_hit = max(group_hit, 2.0 if term in norm.split() else 1.0)
+                    group_hit = max(group_hit, 2.0 if term in name_tokens else 1.5)
+            if not group_hit:  # concept synonyms are weaker evidence than the word itself
+                for term in group["concept"]:
+                    if term in norm:
+                        group_hit = max(group_hit, 0.75)
             if group_hit:
                 hit_groups += 1
                 score += group_hit
