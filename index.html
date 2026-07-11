@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AccountSearch AI</title>
+<style>
+  :root {
+    --bg: #131318; --panel: #1e1e26; --panel2: #26262f; --border: #33333e;
+    --text: #e8e8ee; --muted: #9a9aa8; --accent: #cc7a5c; --user-bubble: #2d3a52;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 24px 16px 140px; }
+  header { display: flex; align-items: center; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header .badge { color: var(--muted); font-size: 13px; }
+  header select {
+    margin-left: auto; background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .chips button {
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 999px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .chips button:hover { color: var(--text); border-color: var(--accent); }
+  .msg { display: flex; gap: 12px; margin-bottom: 18px; }
+  .msg .avatar {
+    flex: 0 0 32px; height: 32px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; font-size: 16px; background: var(--panel2);
+  }
+  .msg.user .avatar { background: var(--user-bubble); }
+  .msg .body { flex: 1; min-width: 0; }
+  .msg.user .body { background: var(--user-bubble); border-radius: 12px; padding: 10px 14px; }
+  .msg .content p { margin-bottom: 8px; }
+  .msg .content ul { margin: 0 0 8px 22px; }
+  .msg .content strong { color: #fff; }
+  .msg .content code { background: var(--panel2); border-radius: 4px; padding: 1px 5px; font-size: 14px; }
+  details.sql { margin-top: 10px; font-size: 13px; }
+  details.sql summary { cursor: pointer; color: var(--muted); }
+  details.sql pre {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; margin-top: 6px; overflow-x: auto; white-space: pre-wrap; font-size: 12.5px;
+  }
+  details.sql .reason { color: var(--muted); margin-top: 5px; }
+  .tablebox { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; overflow: auto; max-height: 340px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel2); }
+  .dl { margin-top: 8px; display: inline-block; font-size: 13px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; }
+  .error { color: #e5817a; background: rgba(229,129,122,.08); border: 1px solid rgba(229,129,122,.3); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+  .thinking { color: var(--muted); font-style: italic; }
+  .thinking .dots::after { content: ""; animation: dots 1.4s steps(4, end) infinite; }
+  @keyframes dots { 0% {content:""} 25% {content:"."} 50% {content:".."} 75% {content:"..."} }
+  form.inputbar {
+    position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, var(--bg) 30%);
+    padding: 26px 16px 22px;
+  }
+  form.inputbar .inner {
+    max-width: 820px; margin: 0 auto; display: flex; gap: 10px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px;
+  }
+  form.inputbar .inner:focus-within { border-color: var(--accent); }
+  form.inputbar input {
+    flex: 1; background: none; border: none; outline: none; color: var(--text); font-size: 15.5px;
+  }
+  form.inputbar button {
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: 8px 16px; font-size: 15px; cursor: pointer;
+  }
+  form.inputbar button:disabled { opacity: .45; cursor: default; }
+  .note { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🔎 AccountSearch AI</h1>
+    <span class="badge">10,000 accounts · natural-language search</span>
+  </header>
+
+  <div class="chips" id="chips"></div>
+  <div id="chat"></div>
+</div>
+
+<form class="inputbar" id="form">
+  <div class="inner">
+    <input id="input" placeholder="Ask about accounts…" autocomplete="off">
+    <button id="send" type="submit">Send</button>
+  </div>
+  <div class="note">Answers come only from the 10,000-row dataset.</div>
+</form>
+
+<script>
+const EXAMPLES = [
+  "find accounts with verizon in the name",
+  "law firms or legal partnerships",
+  "companise related to capitl managment",
+  "wealth management or investors",
+  "universities or research institutes",
+  "how many accounts have 'LLC' in the name?",
+];
+const chat = document.getElementById("chat");
+const form = document.getElementById("form");
+const input = document.getElementById("input");
+const send = document.getElementById("send");
+const history = [];
+let busy = false;
+
+const chipsEl = document.getElementById("chips");
+EXAMPLES.forEach(q => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = q;
+  b.onclick = () => { if (!busy) { input.value = q; form.requestSubmit(); } };
+  chipsEl.appendChild(b);
+});
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function addMsg(role) {
+  const m = el("div", "msg " + role);
+  const av = el("div", "avatar", role === "user" ? "🙂" : "✳️");
+  const body = el("div", "body");
+  m.append(av, body);
+  chat.appendChild(m);
+  m.scrollIntoView({behavior: "smooth", block: "end"});
+  return body;
+}
+
+// minimal safe markdown: bold, code, bullets, paragraphs
+function renderMarkdown(target, text) {
+  target.replaceChildren();
+  const content = el("div", "content");
+  for (const block of text.split(/\n{2,}/)) {
+    const lines = block.split("\n");
+    const isList = lines.every(l => /^\s*[-*•]\s+/.test(l) || !l.trim());
+    const container = isList ? el("ul") : el("p");
+    (isList ? lines.filter(l => l.trim()) : [block]).forEach(line => {
+      const target2 = isList ? el("li") : container;
+      const cleaned = isList ? line.replace(/^\s*[-*•]\s+/, "") : line;
+      // split on **bold** and `code`
+      cleaned.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).forEach(part => {
+        if (/^\*\*[^*]+\*\*$/.test(part)) target2.appendChild(el("strong", "", part.slice(2, -2)));
+        else if (/^`[^`]+`$/.test(part)) target2.appendChild(el("code", "", part.slice(1, -1)));
+        else target2.appendChild(document.createTextNode(part));
+      });
+      if (isList) container.appendChild(target2);
+    });
+    content.appendChild(container);
+  }
+  target.appendChild(content);
+}
+
+function addResults(body, data) {
+  if (data.sql) {
+    const d = el("details", "sql");
+    const s = el("summary", "", "🔍 How I searched");
+    const pre = el("pre", "", data.sql);
+    d.append(s, pre);
+    if (data.reason) d.appendChild(el("div", "reason", data.reason));
+    body.appendChild(d);
+  }
+  if (data.rows && data.rows.length) {
+    const box = el("div", "tablebox");
+    const t = el("table");
+    const thead = el("thead"); const hr = el("tr");
+    data.columns.forEach(c => hr.appendChild(el("th", "", c)));
+    thead.appendChild(hr); t.appendChild(thead);
+    const tb = el("tbody");
+    data.rows.forEach(r => {
+      const tr = el("tr");
+      r.forEach(v => tr.appendChild(el("td", "", String(v))));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); box.appendChild(t); body.appendChild(box);
+
+    const dl = el("button", "dl", "⬇️ Download CSV");
+    dl.type = "button";
+    dl.onclick = () => {
+      const esc = v => `"${String(v).replaceAll('"','""')}"`;
+      const csv = [data.columns.map(esc).join(",")]
+        .concat(data.rows.map(r => r.map(esc).join(","))).join("\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"}));
+      a.download = "accountsearch_results.csv";
+      a.click();
+    };
+    body.appendChild(dl);
+  }
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const q = input.value.trim();
+  if (!q || busy) return;
+  busy = true; send.disabled = true; input.value = "";
+
+  renderMarkdown(addMsg("user"), q);
+  history.push({role: "user", content: q});
+
+  const body = addMsg("assistant");
+  const think = el("div", "thinking");
+  think.append("Searching 10,000 accounts", el("span", "dots"));
+  body.appendChild(think);
+
+  try {
+    const resp = await fetch("/api/search", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: q, history: history.slice(0, -1)}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    renderMarkdown(body, data.answer);
+    addResults(body, data);
+    history.push({role: "assistant", content: data.answer});
+  } catch (err) {
+    body.replaceChildren(el("div", "error", "⚠️ " + err.message));
+    history.pop(); // don't poison the context with a failed turn
+  } finally {
+    busy = false; send.disabled = false;
+    body.scrollIntoView({behavior: "smooth", block: "end"});
+  }
+});
+</script>
+</body>
+</html>
