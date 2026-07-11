@@ -431,18 +431,19 @@ def template_answer(rows: list, columns: list) -> str:
             f"Full results in the table below.")
 
 
-def run_pipeline(query: str, history: list, api_key: str, preferred_model: str) -> dict:
+def run_pipeline(query: str, history: list, api_key: str, preferred_model: str,
+                 force_ai: bool = False) -> dict:
     history = [
         {"role": m["role"], "content": str(m["content"])}
         for m in history[-MAX_HISTORY_MESSAGES:]
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
 
-    # Instant path: plain name searches never need a model. Skip it for
-    # analytical questions and for follow-up refinements that depend on
-    # conversation context (the AI path understands those).
+    # Instant path: plain name searches never need a model. Skip it when the
+    # client explicitly asks for AI (mode="ai"), for analytical questions, and
+    # for follow-up refinements that depend on conversation context.
     is_refinement = bool(history) and bool(REFINEMENT_RE.search(query))
-    if not needs_analytical_answer(query, "") and not is_refinement:
+    if not force_ai and not needs_analytical_answer(query, "") and not is_refinement:
         hit = instant_search(query)
         if hit and hit["rows"]:
             wants_count = bool(re.search(r"\bhow many|count\b", query, re.IGNORECASE))
@@ -581,7 +582,8 @@ class handler(BaseHTTPRequestHandler):
             model = body.get("model") or MODELS[0]
             if model not in MODELS:
                 model = MODELS[0]
-            result = run_pipeline(query, history, api_key, model)
+            force_ai = body.get("mode") == "ai"
+            result = run_pipeline(query, history, api_key, model, force_ai=force_ai)
             self._send(200, result)
         except Exception as e:  # noqa: BLE001
             self._send(502, {"error": str(e)[:500]})
