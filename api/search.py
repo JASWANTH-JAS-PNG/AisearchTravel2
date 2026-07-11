@@ -107,6 +107,176 @@ def load_db() -> sqlite3.Connection:
 
 
 # --------------------------------------------------------------------------
+# Instant in-memory fuzzy index (no AI call, ~ms). Built once per cold start.
+# Handles literal/typo'd/concept name searches; complex questions still go
+# through the AI SQL pipeline.
+# --------------------------------------------------------------------------
+
+STOPWORDS = {
+    "find", "search", "show", "list", "get", "give", "me", "all", "any", "anything",
+    "account", "accounts", "company", "companies", "name", "names", "named", "called",
+    "with", "in", "the", "a", "an", "of", "to", "that", "have", "has", "having",
+    "contain", "contains", "containing", "related", "and", "or", "is", "are", "do",
+    "does", "please", "how", "many", "much", "count", "number", "them", "it", "its",
+}
+
+CONCEPT_MAP = {
+    "law": ["law", "llp", "legal", "attorney", "partners"],
+    "legal": ["law", "llp", "legal", "attorney", "partners"],
+    "lawyer": ["law", "llp", "legal", "attorney"],
+    "lawyers": ["law", "llp", "legal", "attorney"],
+    "partnership": ["llp", "partners", "partnership"],
+    "partnerships": ["llp", "partners", "partnership"],
+    "firm": ["llp", "llc", "inc", "group", "partners"],
+    "firms": ["llp", "llc", "inc", "group", "partners"],
+    "wealth": ["wealth", "capital", "advisors", "advisers", "investors", "asset"],
+    "investor": ["investors", "capital", "invest", "ventures", "equity", "partners"],
+    "investors": ["investors", "capital", "invest", "ventures", "equity", "partners"],
+    "investment": ["capital", "investors", "invest", "ventures", "equity", "asset"],
+    "university": ["university", "college", "institute", "research", "academy"],
+    "universities": ["university", "college", "institute", "research", "academy"],
+    "school": ["school", "university", "college", "academy", "education"],
+    "research": ["research", "institute", "laboratories", "labs", "sciences"],
+    "bank": ["bank", "bancorp", "banking", "financial", "trust"],
+    "banks": ["bank", "bancorp", "banking", "financial", "trust"],
+    "tech": ["tech", "technologies", "technology", "software", "systems", "digital"],
+    "technology": ["tech", "technologies", "technology", "software", "systems"],
+    "health": ["health", "medical", "healthcare", "hospital", "pharma", "clinic"],
+    "healthcare": ["health", "medical", "healthcare", "hospital", "pharma"],
+    "medical": ["medical", "health", "healthcare", "hospital", "pharma", "clinic"],
+    "insurance": ["insurance", "assurance", "mutual"],
+    "hotel": ["hotel", "hotels", "resort", "hospitality", "inn"],
+    "hotels": ["hotel", "hotels", "resort", "hospitality", "inn"],
+    "media": ["media", "broadcasting", "entertainment", "communications", "news"],
+    "energy": ["energy", "power", "electric", "gas", "oil", "utilities"],
+}
+
+REFINEMENT_RE = re.compile(
+    r"^\s*(now|only|just|also|and|but|then|them|those|these|that one|from those|of those|filter)\b",
+    re.IGNORECASE,
+)
+NUMERIC_FILTER_RE = re.compile(
+    r"\b(?:id|ids)\s*(over|above|greater than|more than|under|below|less than)\s*([\d,]+)",
+    re.IGNORECASE,
+)
+
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", " ", s.lower()).strip()
+
+
+def _trigrams(s: str) -> set:
+    padded = f"  {s} "
+    return {padded[i:i + 3] for i in range(len(padded) - 2)}
+
+
+def _build_index():
+    csv_path = next((p for p in CSV_CANDIDATES if p.exists()), None)
+    if csv_path is None:
+        raise FileNotFoundError("Accounts CSV not found in deployment bundle.")
+    entries, vocab = [], {}
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+        for i, r in enumerate(csv.reader(f), start=1):
+            if not r:
+                continue
+            name = r[1]
+            norm = _norm_text(name)
+            entries.append((i, int(r[0]), name, norm))
+            for tok in norm.split():
+                if len(tok) > 1:
+                    vocab.setdefault(tok, _trigrams(tok))
+    return entries, vocab
+
+
+_ENTRIES, _VOCAB = _build_index()
+
+
+def _similar_tokens(token: str) -> set:
+    """Vocabulary tokens near `token` by trigram Dice similarity. Always
+    searched (even when the token exists verbatim) because the data itself
+    contains typos — e.g. querying 'managment' must also match 'management'."""
+    tg = _trigrams(token)
+    best, best_score = None, 0.0
+    for vocab_tok, vtg in _VOCAB.items():
+        if vocab_tok == token:
+            continue
+        inter = len(tg & vtg)
+        if not inter:
+            continue
+        score = 2 * inter / (len(tg) + len(vtg))
+        if score > best_score:
+            best, best_score = vocab_tok, score
+    out = set()
+    if token in _VOCAB:
+        out.add(token)
+        if best_score >= 0.70:  # verbatim hit: only add a very close sibling
+            out.add(best)
+    elif best_score >= 0.55:  # unknown word: take the nearest correction
+        out.add(best)
+    return out
+
+
+def instant_search(query: str) -> dict | None:
+    """Millisecond fuzzy search over account names. Returns None when the query
+    is out of scope for the index (no usable terms) so the AI path can run."""
+    q = _norm_text(query)
+
+    numeric = None
+    m = NUMERIC_FILTER_RE.search(query)
+    if m:
+        op, num = m.group(1).lower(), int(m.group(2).replace(",", ""))
+        numeric = (op in ("over", "above", "greater than", "more than"), num)
+        q = _norm_text(NUMERIC_FILTER_RE.sub(" ", query))
+
+    tokens = [t for t in q.split() if t not in STOPWORDS and len(t) > 1 and not t.isdigit()]
+
+    # term groups: each query token expands to {itself, typo-correction, concept synonyms}
+    groups = []
+    for tok in tokens:
+        terms = {tok}
+        similar = _similar_tokens(tok)
+        terms.update(similar)
+        for t in [tok, *similar]:
+            terms.update(CONCEPT_MAP.get(t, []))
+        if terms not in groups:  # dedupe synonymous tokens (e.g. "law" + "legal")
+            groups.append(terms)
+
+    if not groups and numeric is None:
+        return None
+
+    scored = []
+    for row_id, account_id, name, norm in _ENTRIES:
+        if numeric is not None:
+            greater, num = numeric
+            if (account_id > num) != greater and account_id != num:
+                continue
+        hit_groups, score = 0, 0.0
+        for terms in groups:
+            group_hit = 0.0
+            for term in terms:
+                if term in norm:
+                    group_hit = max(group_hit, 2.0 if term in norm.split() else 1.0)
+            if group_hit:
+                hit_groups += 1
+                score += group_hit
+        if groups and not hit_groups:
+            continue
+        scored.append((hit_groups, score, row_id, account_id, name))
+
+    if not scored:
+        return None
+    scored.sort(key=lambda t: (-t[0], -t[1], t[2]))
+    # keep only the best tier: rows matching as many term groups as the best row does
+    max_hit = scored[0][0]
+    pool = [s for s in scored if s[0] == max_hit] if groups else scored
+    return {
+        "total": len(pool),
+        "rows": [[r[2], r[3], r[4]] for r in pool[:MAX_ROWS_TO_MODEL]],
+        "columns": ["id", "account_id", "account_name"],
+    }
+
+
+# --------------------------------------------------------------------------
 # SQL validation (same rules as the Streamlit app)
 # --------------------------------------------------------------------------
 
@@ -250,6 +420,32 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str) 
         for m in history[-MAX_HISTORY_MESSAGES:]
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
+
+    # Instant path: plain name searches never need a model. Skip it for
+    # analytical questions and for follow-up refinements that depend on
+    # conversation context (the AI path understands those).
+    is_refinement = bool(history) and bool(REFINEMENT_RE.search(query))
+    if not needs_analytical_answer(query, "") and not is_refinement:
+        hit = instant_search(query)
+        if hit and hit["rows"]:
+            wants_count = bool(re.search(r"\bhow many|count\b", query, re.IGNORECASE))
+            if wants_count:
+                answer = f"**{hit['total']}** matching accounts."
+            else:
+                examples = ", ".join(r[2] for r in hit["rows"][:3])
+                cap = f" (showing the first {MAX_ROWS_TO_MODEL})" if hit["total"] > MAX_ROWS_TO_MODEL else ""
+                answer = (f"Found **{hit['total']} matching account"
+                          f"{'s' if hit['total'] != 1 else ''}**{cap} — e.g. {examples}. "
+                          f"Full results in the table below.")
+            return {
+                "answer": answer,
+                "sql": None,
+                "reason": "Matched instantly against the in-memory fuzzy name index (typo- and concept-aware) — no AI call needed.",
+                "rows": hit["rows"] if not wants_count else hit["rows"],
+                "total_rows": hit["total"],
+                "columns": hit["columns"],
+                "model_used": [],
+            }
 
     plan_messages = (
         [{"role": "system", "content": SQL_SYSTEM_PROMPT}]
