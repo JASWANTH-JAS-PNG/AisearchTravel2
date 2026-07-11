@@ -28,6 +28,22 @@ Default models: `openai/gpt-oss-120b` (primary), `openai/gpt-4o-mini` (fallback)
      e.g. `google/gemini-2.5-flash-lite,openai/gpt-4o-mini`
 3. Deploy. Done.
 
+## Switching from free to paid (when credit is added)
+
+The current deployment runs on free models via the `MODEL_IDS` env override
+(slow, ~30s/query, shared 50-requests/day cap) because no OpenRouter credit
+has been added yet. To unlock the fast paid tier:
+
+1. Add credit (min $10) at https://openrouter.ai/credits on the account that
+   owns the `OPENROUTER_API_KEY`.
+2. In Vercel → this project → **Settings → Environment Variables** →
+   **delete `MODEL_IDS`**.
+3. **Deployments** tab → latest deployment → ⋯ → **Redeploy**.
+
+That's it — the function falls back to the paid defaults
+(`openai/gpt-oss-120b`, `openai/gpt-4o-mini`), responses drop to ~2–5s, and
+the daily cap disappears. Verify with one query before handing over.
+
 ## Architecture
 
 - `index.html` — static Claude-style chat UI. Conversation history is kept in
