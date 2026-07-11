@@ -210,6 +210,40 @@ def extract_json(text: str) -> dict:
 # Pipeline
 # --------------------------------------------------------------------------
 
+ANALYTICAL_RE = re.compile(
+    r"\b(compar\w*|versus|vs\b|averag\w*|avg\b|mean\b|median\w*|pattern\w*|insight\w*|"
+    r"analy\w*|trend\w*|distribut\w*|breakdown\w*|summar\w*|explain\w*|why\b|"
+    r"most common|least\b|top\s+\d+|differen\w*|correlat\w*|categor\w*|classif\w*|"
+    r"which kind|what kind)",
+    re.IGNORECASE,
+)
+
+
+def needs_analytical_answer(query: str, sql: str) -> bool:
+    return bool(ANALYTICAL_RE.search(query)) or "group by" in sql.lower()
+
+
+def template_answer(rows: list, columns: list) -> str:
+    """Instant local summary for simple queries — no second model call."""
+    if not rows:
+        return ("No accounts matched, even after broadening the search. "
+                "Try different or more general keywords.")
+    # Single aggregate value (e.g. COUNT)
+    if len(rows) == 1 and len(columns) == 1:
+        label = columns[0].replace("_", " ")
+        return f"**{rows[0][0]}** — {label} for your query."
+    total = len(rows)
+    name_idx = columns.index("account_name") if "account_name" in columns else None
+    if name_idx is not None:
+        examples = ", ".join(str(r[name_idx]) for r in rows[:3])
+        more = f" — e.g. {examples}" if examples else ""
+    else:
+        more = ""
+    cap_note = f" (showing the first {MAX_ROWS_TO_MODEL})" if total >= MAX_ROWS_TO_MODEL else ""
+    return (f"Found **{total} matching account{'s' if total != 1 else ''}**{cap_note}{more}. "
+            f"Full results in the table below.")
+
+
 def run_pipeline(query: str, history: list, api_key: str, preferred_model: str) -> dict:
     history = [
         {"role": m["role"], "content": str(m["content"])}
@@ -269,23 +303,30 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str) 
         except Exception:  # noqa: BLE001 - keep the original empty result
             pass
 
-    row_dicts = [dict(zip(columns, r)) for r in rows[:ANSWER_ROWS_TO_MODEL]]
-    answer_messages = (
-        [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
-        + history
-        + [{
-            "role": "user",
-            "content": (
-                f"User question: {query}\n\n"
-                f"Matching rows ({len(rows)} total, showing up to {ANSWER_ROWS_TO_MODEL}):\n"
-                f"{json.dumps(row_dicts, default=str)}"
-            ),
-        }]
-    )
-    answer, answer_model = with_retries(
-        lambda m: call_model(answer_messages, m, api_key, max_tokens=4000, temperature=0.4),
-        preferred_model,
-    )
+    # Fast mode: simple find/list/count queries get an instant built-in summary.
+    # Only analytical questions pay for a second model call.
+    if needs_analytical_answer(query, sql) and rows:
+        row_dicts = [dict(zip(columns, r)) for r in rows[:ANSWER_ROWS_TO_MODEL]]
+        answer_messages = (
+            [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
+            + history
+            + [{
+                "role": "user",
+                "content": (
+                    f"User question: {query}\n\n"
+                    f"Matching rows ({len(rows)} total, showing up to {ANSWER_ROWS_TO_MODEL}):\n"
+                    f"{json.dumps(row_dicts, default=str)}"
+                ),
+            }]
+        )
+        answer, answer_model = with_retries(
+            lambda m: call_model(answer_messages, m, api_key, max_tokens=4000, temperature=0.4),
+            preferred_model,
+        )
+        models_used = sorted({plan_model, answer_model})
+    else:
+        answer = template_answer(rows, columns)
+        models_used = [plan_model]
 
     return {
         "answer": answer,
@@ -294,7 +335,7 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str) 
         "rows": [list(r) for r in rows[:MAX_ROWS_TO_MODEL]],
         "total_rows": len(rows),
         "columns": columns,
-        "model_used": sorted({plan_model, answer_model}),
+        "model_used": models_used,
     }
 
 
