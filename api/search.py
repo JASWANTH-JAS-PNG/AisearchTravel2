@@ -114,8 +114,10 @@ schema below and a user question, respond ONLY with a single JSON object of the 
 Rules:
 - SELECT only, from the accounts and/or monthly_activity tables (JOIN on account_id
   when both are needed). No INSERT/UPDATE/DELETE/DROP/ALTER/PRAGMA/ATTACH.
-- Exactly one statement, no semicolons. Subqueries, JOINs, GROUP BY, HAVING,
-  ORDER BY and aggregate functions are all allowed.
+- Exactly one statement, no semicolons. Subqueries, CTEs (WITH ... SELECT),
+  JOINs, GROUP BY, HAVING, ORDER BY and aggregate functions are all allowed.
+- Quarter bucketing (SQLite has no QUARTER()): group by
+  substr(month,1,4) || '-Q' || ((CAST(substr(month,6,2) AS INTEGER) + 2) / 3).
 - Add LIMIT 50 unless the query is a pure COUNT/aggregation.
 - For per-account rankings/aggregations ("top accounts by revenue"), GROUP BY the
   account, ORDER BY the aggregate, and still add LIMIT 50.
@@ -456,8 +458,10 @@ def validate_sql(sql: str) -> str:
     if ";" in s:
         raise SQLValidationError("Multiple statements are not allowed.")
     low = s.lower()
-    if not low.startswith("select"):
-        raise SQLValidationError("Only SELECT statements are allowed.")
+    # WITH (CTE) is read-only SELECT syntax — needed for quarter/period bucketing;
+    # the forbidden-keyword scan below still blocks any write inside the CTE body.
+    if not (low.startswith("select") or low.startswith("with")):
+        raise SQLValidationError("Only SELECT statements (optionally WITH ... SELECT) are allowed.")
     tokens = set(re.findall(r"[a-z_]+", low))
     banned = tokens & FORBIDDEN_KEYWORDS
     if banned:
@@ -654,7 +658,22 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str,
         return plan
 
     plan, plan_model = with_retries(plan_step, preferred_model)
-    sql = validate_sql(plan["sql"])
+    try:
+        sql = validate_sql(plan["sql"])
+    except SQLValidationError as ve:
+        # Give the model one shot at fixing a rejected query instead of erroring.
+        fix_messages = plan_messages + [
+            {"role": "assistant", "content": json.dumps(plan)},
+            {"role": "user", "content": (
+                f"Your SQL was rejected by validation: {ve} "
+                "Rewrite it as ONE read-only statement (WITH ... SELECT is allowed) "
+                "that satisfies every rule, and respond with the same JSON format.")},
+        ]
+        plan, plan_model = with_retries(
+            lambda m: extract_json(call_model(fix_messages, m, api_key, 2000, 0.1)),
+            preferred_model,
+        )
+        sql = validate_sql(plan["sql"])
     reason = plan.get("reason", "")
 
     conn = load_db()
