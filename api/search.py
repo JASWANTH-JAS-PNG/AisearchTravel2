@@ -4,13 +4,15 @@ POST /api/search  {"query": "...", "history": [{"role","content"}...], "model": 
 ->  {"answer", "sql", "reason", "rows", "columns", "model_used"}   or   {"error": "..."}
 
 Stdlib only (urllib instead of requests) to keep the function bundle tiny.
-The 500k-row CSV ships with the deployment and is loaded into in-memory
-SQLite on each invocation.
+Data lives in accounts.db (built by generate_synthetic_db.py): 500k accounts
+plus 24 months of per-account booking/revenue history in monthly_activity.
+The DB is opened read-only per request; months with zero bookings have no row.
 """
 
 import csv
 import json
 import os
+import pickle
 import re
 import sqlite3
 import time
@@ -18,6 +20,8 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+
+import _turso
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Paid tier: fast, reliable, ~$0.00025/query at defaults. Override without a code
@@ -27,7 +31,7 @@ MODELS = [
     for m in os.environ.get("MODEL_IDS", "openai/gpt-oss-120b,openai/gpt-4o-mini").split(",")
     if m.strip()
 ]
-TABLE = "accounts"
+TABLES = ("accounts", "monthly_activity")
 MAX_ROWS_TO_MODEL = 50  # hard cap on rows fetched/displayed
 ANSWER_ROWS_TO_MODEL = 25  # rows sent to the answer model (smaller = faster)
 MAX_HISTORY_MESSAGES = 20
@@ -35,75 +39,114 @@ RETRY_ROUNDS = 2
 RETRY_DELAY_SECONDS = 4
 CALL_TIMEOUT_SECONDS = 90
 
+DB_CANDIDATES = [
+    Path(__file__).resolve().parent.parent / "accounts.db",
+    Path.cwd() / "accounts.db",
+]
 CSV_CANDIDATES = [
     Path(__file__).resolve().parent.parent / "Accounts-VadlamudiRamesh.csv",
     Path.cwd() / "Accounts-VadlamudiRamesh.csv",
 ]
 
-SCHEMA_DESCRIPTION = f"""
-Table: {TABLE}
-Columns:
-- id (INTEGER, primary key, row number)
-- account_id (INTEGER) - the original account number from the source system
-- account_name (TEXT) - the company / account name
 
-There are 500,000 rows total. Every column is exact as imported from a real CRM
-export; there are no other fields (no dates, costs, or categories) - all
-matching must be done on account_id and account_name.
+def _local_db() -> Path | None:
+    return next((p for p in DB_CANDIDATES if p.exists()), None)
+
+
+def load_db():
+    """Local accounts.db when present (dev); hosted Turso otherwise (Vercel)."""
+    db_path = _local_db()
+    if db_path is not None:
+        return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    if _turso.available():
+        return _turso.connect()
+    raise FileNotFoundError(
+        "accounts.db not found and TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set.")
+
+
+def _month_bounds() -> tuple:
+    try:
+        conn = load_db()
+        try:
+            return conn.execute("SELECT MIN(month), MAX(month) FROM monthly_activity").fetchone()
+        finally:
+            conn.close()
+    except Exception:  # data unreachable at import: fall back to generator defaults
+        return "2024-07", "2026-06"
+
+
+FIRST_MONTH, LATEST_MONTH = _month_bounds()
+_LY, _LM = int(LATEST_MONTH[:4]), int(LATEST_MONTH[5:7])
+_FY, _FM = int(FIRST_MONTH[:4]), int(FIRST_MONTH[5:7])
+TOTAL_MONTHS = (_LY * 12 + _LM) - (_FY * 12 + _FM) + 1
+
+SCHEMA_DESCRIPTION = f"""
+Table: accounts — one row per account (500,000 rows)
+- id (INTEGER, primary key, row number)
+- account_id (INTEGER, unique) — the account number; JOIN key to monthly_activity
+- account_name (TEXT) — the company / account name
+
+Table: monthly_activity — one row per account per month IN WHICH IT BOOKED (~7.5M rows)
+- account_id (INTEGER) — joins accounts.account_id
+- month (TEXT, 'YYYY-MM') — from '{FIRST_MONTH}' to '{LATEST_MONTH}' ({TOTAL_MONTHS} months of history)
+- bookings (INTEGER) — number of trips booked that month (always >= 1 when a row exists)
+- revenue (REAL) — total booking revenue that month, in USD
+- profit (REAL) — net profit on that month's bookings, in USD
+- last_reservation_date (TEXT, 'YYYY-MM-DD') — date of that month's final booking
+
+CRITICAL — monthly_activity is SPARSE: a month with zero bookings has NO row.
+Therefore:
+- Zero bookings in a month => no row; never assume {TOTAL_MONTHS} rows per account.
+- Accounts that NEVER booked: WHERE NOT EXISTS (SELECT 1 FROM monthly_activity m WHERE m.account_id = a.account_id).
+- "When did account X last book?": SELECT MAX(m.last_reservation_date) (or MAX(m.month)).
+- "Months since last booking" (latest data month is {LATEST_MONTH}):
+  ({_LY}*12 + {_LM}) - (CAST(substr(MAX(m.month),1,4) AS INTEGER)*12 + CAST(substr(MAX(m.month),6,2) AS INTEGER))
+- TRUE average bookings per month over the whole history: SUM(m.bookings)/{TOTAL_MONTHS}.0
+  (AVG(m.bookings) is the average over BOOKING months only — say which one you used in "reason").
+- Customer-quality rule of thumb used by this business, per month: ~20 trips = good,
+  ~30 = best, ~40+ = elite; useful as HAVING thresholds when asked about account quality.
 """
 
-SQL_SYSTEM_PROMPT = f"""You are a database search planner for a company accounts table. Given the
+SQL_SYSTEM_PROMPT = f"""You are a database search planner for a travel-booking CRM. Given the
 schema below and a user question, respond ONLY with a single JSON object of the form:
 {{"sql": "<one SELECT query>", "reason": "<one sentence on how you interpreted the request>"}}
 
 Rules:
-- SELECT only, from the {TABLE} table. No INSERT/UPDATE/DELETE/DROP/ALTER/PRAGMA/ATTACH.
-- Exactly one statement, no semicolons.
+- SELECT only, from the accounts and/or monthly_activity tables (JOIN on account_id
+  when both are needed). No INSERT/UPDATE/DELETE/DROP/ALTER/PRAGMA/ATTACH.
+- Exactly one statement, no semicolons. Subqueries, JOINs, GROUP BY, HAVING,
+  ORDER BY and aggregate functions are all allowed.
 - Add LIMIT 50 unless the query is a pure COUNT/aggregation.
+- For per-account rankings/aggregations ("top accounts by revenue"), GROUP BY the
+  account, ORDER BY the aggregate, and still add LIMIT 50.
 - Use LOWER(account_name) LIKE '%...%' with lowercase values for fuzzy text matching.
 - Correct obvious typos in the user's words before building the LIKE pattern (e.g.
   "companise" -> "companies", "capitl managment" -> "capital management").
 - For conceptual/category queries with no literal keyword given (e.g. "law firms",
   "wealth management", "universities"), expand to the relevant industry keywords you'd expect
-  in a company name (e.g. law firms -> '%law%' OR '%llp%' OR '%partners%'; wealth management ->
-  '%wealth%' OR '%capital%' OR '%advisors%' OR '%investors%'; universities -> '%university%'
-  OR '%college%' OR '%institute%') and combine with OR conditions, explaining your
-  interpretation in "reason".
+  in a company name (e.g. law firms -> '%law%' OR '%llp%' OR '%partners%') and combine with
+  OR conditions, explaining your interpretation in "reason".
 - For counting questions ("how many..."), use SELECT COUNT(*) AS count ... and do not add LIMIT.
-- Never invent column names not in the schema.
+- Money amounts are USD; round money in SELECT with ROUND(x, 2) when aggregating.
+- Never invent column names not in the schema. Respect the SPARSE rules below exactly.
 
 {SCHEMA_DESCRIPTION}
 """
 
-ANSWER_SYSTEM_PROMPT = """You are AccountSearch AI, a friendly, concise assistant in the style of
-Claude. Using ONLY the rows provided below (never invent data), answer the user's question
+ANSWER_SYSTEM_PROMPT = f"""You are AccountSearch AI, a friendly, concise assistant in the style of
+Claude, answering questions over a travel-booking CRM (500,000 accounts with {TOTAL_MONTHS} months of
+booking history, {FIRST_MONTH} to {LATEST_MONTH}; a month absent from the data means zero bookings).
+Using ONLY the rows provided below (never invent data), answer the user's question
 conversationally. Cite account_id values when referencing specific accounts, mention the total
-count of matching records, and call out any notable patterns you notice in the names. If the
-rows are empty, say so plainly and suggest a broader query. Keep the answer focused and
-skimmable - short paragraphs or a brief bulleted list."""
+count of matching records, format money as USD, and call out notable patterns (booking trends,
+revenue concentration, gaps since last reservation). If the rows are empty, say so plainly and
+suggest a broader query. Keep the answer focused and skimmable - short paragraphs or a brief
+bulleted list."""
 
 FORBIDDEN_KEYWORDS = {
     "insert", "update", "delete", "drop", "alter", "create", "attach", "detach", "pragma",
     "replace", "truncate", "grant", "revoke", "vacuum", "reindex", "sqlite_master",
 }
-
-
-# --------------------------------------------------------------------------
-# Data
-# --------------------------------------------------------------------------
-
-def load_db() -> sqlite3.Connection:
-    csv_path = next((p for p in CSV_CANDIDATES if p.exists()), None)
-    if csv_path is None:
-        raise FileNotFoundError("Accounts CSV not found in deployment bundle.")
-    conn = sqlite3.connect(":memory:")
-    cur = conn.cursor()
-    cur.execute(f"CREATE TABLE {TABLE} (id INTEGER PRIMARY KEY, account_id INTEGER, account_name TEXT)")
-    with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        rows = [(i, int(r[0]), r[1]) for i, r in enumerate(csv.reader(f), start=1) if r]
-    cur.executemany(f"INSERT INTO {TABLE} VALUES (?,?,?)", rows)
-    conn.commit()
-    return conn
 
 
 # --------------------------------------------------------------------------
@@ -161,13 +204,14 @@ NUMERIC_FILTER_RE = re.compile(
 )
 
 
-def _norm_text(s: str) -> str:
+_CAMEL_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+
+def _norm_text(s: str, split_camel: bool = False) -> str:
+    if split_camel:
+        s = _CAMEL_RE.sub(" ", s)  # 'HealthCare' -> 'Health Care' (index side)
+    s = s.replace("'", "").replace("’", "")  # O'Brien / OBrien match either way
     return re.sub(r"[^a-z0-9 ]+", " ", s.lower()).strip()
-
-
-def _trigrams(s: str) -> set:
-    padded = f"  {s} "
-    return {padded[i:i + 3] for i in range(len(padded) - 2)}
 
 
 def _skeleton(token: str) -> str:
@@ -175,55 +219,154 @@ def _skeleton(token: str) -> str:
     return re.sub(r"[aeiou]+", "", token)
 
 
-def _build_index():
+def _allowed_dist(token: str) -> int:
+    """Max edit distance for fuzzy matching, by length: short tokens are
+    exact-only so 'bank' can never merge with 'rank'."""
+    return 0 if len(token) < 5 else 1 if len(token) < 7 else 2
+
+
+def _deletes(token: str, max_d: int) -> set:
+    """All variants of `token` with up to max_d characters deleted (SymSpell)."""
+    out, frontier = {token}, {token}
+    for _ in range(max_d):
+        frontier = {t[:i] + t[i + 1:] for t in frontier for i in range(len(t))}
+        out |= frontier
+    return out
+
+
+def _damerau(a: str, b: str, cap: int) -> int:
+    """Damerau-Levenshtein distance (transposition = 1 edit), early-exit > cap."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            v = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                v = min(v, prev2[j - 2] + 1)
+            cur[j] = v
+        if min(cur) > cap:
+            return cap + 1
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+INDEX_VERSION = 2
+INDEX_PICKLE_CANDIDATES = [
+    Path(__file__).resolve().parent.parent / "search_index.pkl",
+    Path.cwd() / "search_index.pkl",
+]
+
+
+def _index_source_rows():
+    """(id, account_id, name) rows for the fuzzy index: the local DB when
+    present, else the bundled CSV (same names, same row order) — so a remote-DB
+    deployment never streams 500k rows over the network at cold start."""
+    db_path = _local_db()
+    if db_path is not None:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            yield from conn.execute("SELECT id, account_id, account_name FROM accounts ORDER BY id")
+        finally:
+            conn.close()
+        return
     csv_path = next((p for p in CSV_CANDIDATES if p.exists()), None)
     if csv_path is None:
-        raise FileNotFoundError("Accounts CSV not found in deployment bundle.")
-    entries, vocab, skeletons = [], {}, {}
+        raise FileNotFoundError("Neither accounts.db nor the accounts CSV found.")
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         for i, r in enumerate(csv.reader(f), start=1):
-            if not r:
+            if r:
+                yield (i, int(r[0]), r[1])
+
+
+def _build_index() -> dict:
+    """entries + vocabulary frequency + SymSpell deletes + consonant skeletons.
+    The vocabulary comes from the data itself, so misspellings stored in account
+    names ('managment') are vocabulary tokens too — expanding a query token to
+    ALL nearby vocabulary tokens therefore fixes typos in BOTH directions."""
+    entries, freq, skeletons = [], {}, {}
+    for i, account_id, name in _index_source_rows():
+        norm = _norm_text(name, split_camel=True)
+        entries.append((i, account_id, name, norm, norm.replace(" ", "")))
+        for tok in set(norm.split()):
+            if len(tok) > 1:
+                freq[tok] = freq.get(tok, 0) + 1
+                skeletons.setdefault(_skeleton(tok), set()).add(tok)
+    deletes = {}
+    for tok in freq:
+        for v in _deletes(tok, _allowed_dist(tok)):
+            deletes.setdefault(v, []).append(tok)
+    return {"version": INDEX_VERSION, "db_mtime": _db_mtime(),
+            "entries": entries, "freq": freq, "deletes": deletes, "skeletons": skeletons}
+
+
+def _db_mtime() -> float:
+    """Freshness stamp for the pickled index: whichever source it builds from."""
+    src = _local_db() or next((p for p in CSV_CANDIDATES if p.exists()), None)
+    return src.stat().st_mtime if src else 0.0
+
+
+def _load_index() -> dict:
+    for p in INDEX_PICKLE_CANDIDATES:
+        if p.exists():
+            try:
+                with open(p, "rb") as f:
+                    idx = pickle.load(f)
+                if idx.get("version") == INDEX_VERSION and idx.get("db_mtime") == _db_mtime():
+                    return idx
+            except Exception:  # noqa: BLE001 - stale/corrupt pickle: rebuild
+                pass
+    idx = _build_index()
+    for p in INDEX_PICKLE_CANDIDATES:
+        try:
+            with open(p, "wb") as f:
+                pickle.dump(idx, f, protocol=pickle.HIGHEST_PROTOCOL)
+            break
+        except OSError:  # read-only deployment filesystem: in-memory only
+            continue
+    return idx
+
+
+_IDX = _load_index()
+_ENTRIES, _FREQ, _DELETES, _SKELETONS = (_IDX["entries"], _IDX["freq"],
+                                         _IDX["deletes"], _IDX["skeletons"])
+
+
+def _expand_token(token: str) -> set:
+    """The full typo cluster for a query token: every vocabulary token within
+    its allowed edit distance (plus consonant-skeleton rescues), guarded so
+    unrelated words never merge. Known words expand only to much rarer
+    (typo-of-it) or much more frequent (it's-the-typo) siblings."""
+    known = token in _FREQ
+    out = {token} if known else set()
+    cap = _allowed_dist(token)
+    cands = set()
+    if cap:
+        for v in _deletes(token, cap):
+            cands.update(_DELETES.get(v, ()))
+    cands.update(_SKELETONS.get(_skeleton(token), ()))
+    cands.discard(token)
+    sk, scored = _skeleton(token), []
+    for c in cands:
+        if c[0] != token[0]:  # typos almost never hit the first letter
+            continue
+        if _skeleton(c) == sk and abs(len(c) - len(token)) <= 3:
+            d = 0  # vowel-mangling rescue ('abndence' -> 'abundance')
+        else:
+            if abs(len(c) - len(token)) > 2:
                 continue
-            name = r[1]
-            norm = _norm_text(name)
-            entries.append((i, int(r[0]), name, norm))
-            for tok in norm.split():
-                if len(tok) > 1:
-                    vocab.setdefault(tok, _trigrams(tok))
-                    skeletons.setdefault(_skeleton(tok), set()).add(tok)
-    return entries, vocab, skeletons
-
-
-_ENTRIES, _VOCAB, _SKELETONS = _build_index()
-
-
-def _similar_tokens(token: str) -> set:
-    """Vocabulary tokens near `token` by trigram Dice similarity. Always
-    searched (even when the token exists verbatim) because the data itself
-    contains typos — e.g. querying 'managment' must also match 'management'."""
-    tg = _trigrams(token)
-    best, best_score = None, 0.0
-    for vocab_tok, vtg in _VOCAB.items():
-        if vocab_tok == token:
-            continue
-        inter = len(tg & vtg)
-        if not inter:
-            continue
-        score = 2 * inter / (len(tg) + len(vtg))
-        if score > best_score:
-            best, best_score = vocab_tok, score
-    out = set()
-    if token in _VOCAB:
-        out.add(token)
-        if best_score >= 0.70:  # verbatim hit: only add a very close sibling
-            out.add(best)
-    elif best_score >= 0.55:  # unknown word: take the nearest correction
-        out.add(best)
-    if token not in _VOCAB:
-        # consonant-skeleton match rescues typos trigrams miss ('abndence'->'abundance')
-        for cand in _SKELETONS.get(_skeleton(token), ()):
-            if cand[0] == token[0] and abs(len(cand) - len(token)) <= 3:
-                out.add(cand)
+            d = _damerau(token, c, 2)
+            if d > min(cap, _allowed_dist(c)):
+                continue
+        if known:
+            ft, fc = _FREQ[token], _FREQ[c]
+            # similar frequency = probably a genuinely different word: skip
+            if not (fc <= ft * 0.25 or fc >= ft * 4):
+                continue
+        scored.append((d, -_FREQ[c], c))
+    out.update(c for _, _, c in sorted(scored)[:6])
     return out
 
 
@@ -241,10 +384,11 @@ def instant_search(query: str) -> dict | None:
 
     tokens = [t for t in q.split() if t not in STOPWORDS and len(t) > 1 and not t.isdigit()]
 
-    # term groups: each query token expands to {itself, typo-correction, concept synonyms}
+    # term groups: each query token expands to {itself, its full typo cluster,
+    # concept synonyms} — the cluster covers query-side AND data-side typos
     groups = []
     for tok in tokens:
-        direct = {tok} | _similar_tokens(tok)
+        direct = {tok} | _expand_token(tok)
         concept = set()
         for t in direct:
             concept.update(CONCEPT_MAP.get(t, []))
@@ -257,7 +401,7 @@ def instant_search(query: str) -> dict | None:
         return None
 
     scored = []
-    for row_id, account_id, name, norm in _ENTRIES:
+    for row_id, account_id, name, norm, squashed in _ENTRIES:
         if numeric is not None:
             greater, num = numeric
             if (account_id > num) != greater and account_id != num:
@@ -269,6 +413,8 @@ def instant_search(query: str) -> dict | None:
             for term in group["direct"]:
                 if term in norm:
                     group_hit = max(group_hit, 2.0 if term in name_tokens else 1.5)
+                elif term in squashed:  # 'healthcare' query vs 'Health Care' name
+                    group_hit = max(group_hit, 1.5)
             if not group_hit:  # concept synonyms are weaker evidence than the word itself
                 for term in group["concept"]:
                     if term in norm:
@@ -316,9 +462,9 @@ def validate_sql(sql: str) -> str:
     banned = tokens & FORBIDDEN_KEYWORDS
     if banned:
         raise SQLValidationError(f"Forbidden keyword(s) used: {', '.join(banned)}")
-    if TABLE not in low:
-        raise SQLValidationError(f"Query must select from the {TABLE} table.")
-    is_aggregate = "count(" in low or "group by" in low or "avg(" in low or "sum(" in low
+    if not any(t in low for t in TABLES):
+        raise SQLValidationError(f"Query must select from {' or '.join(TABLES)}.")
+    is_aggregate = any(k in low for k in ("count(", "group by", "avg(", "sum(", "max(", "min(", "total("))
     limit_match = re.search(r"\blimit\s+(\d+)", low)
     if limit_match:
         if int(limit_match.group(1)) > MAX_ROWS_TO_MODEL:
@@ -332,18 +478,10 @@ def validate_sql(sql: str) -> str:
 # OpenRouter (urllib, non-streaming)
 # --------------------------------------------------------------------------
 
-def call_model(messages: list, model: str, api_key: str, max_tokens: int, temperature: float) -> str:
-    payload = json.dumps({
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        # Reasoning models burn 30s+ on hidden chain-of-thought; ask providers to skip it.
-        "reasoning": {"enabled": False},
-    }).encode("utf-8")
+def _openrouter_post(body: dict, api_key: str) -> dict:
     req = urllib.request.Request(
         OPENROUTER_URL,
-        data=payload,
+        data=json.dumps(body).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -354,10 +492,31 @@ def call_model(messages: list, model: str, api_key: str, max_tokens: int, temper
     )
     try:
         with urllib.request.urlopen(req, timeout=CALL_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")[:300]
-        raise RuntimeError(f"HTTP {e.code} from {model}: {body}") from e
+        detail = e.read().decode("utf-8", errors="ignore")[:300]
+        raise RuntimeError(f"HTTP {e.code} from {body['model']}: {detail}") from e
+
+
+def call_model(messages: list, model: str, api_key: str, max_tokens: int, temperature: float) -> str:
+    body = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        # Reasoning models burn 30s+ on hidden chain-of-thought; ask providers to skip it.
+        "reasoning": {"enabled": False},
+    }
+    try:
+        data = _openrouter_post(body, api_key)
+    except RuntimeError as e:
+        # Some endpoints (e.g. gpt-oss :free) refuse to disable reasoning; retry
+        # with it on and a bigger budget so reasoning tokens don't starve the answer.
+        if "easoning" not in str(e) or "mandatory" not in str(e):
+            raise
+        body.pop("reasoning")
+        body["max_tokens"] = max(max_tokens, 4000)
+        data = _openrouter_post(body, api_key)
     choice = data["choices"][0]
     content = choice["message"].get("content")
     if not content:
@@ -405,9 +564,20 @@ ANALYTICAL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Questions about booking activity / money / recency live in monthly_activity —
+# the instant name index knows nothing about them, so they must take the AI path,
+# and they deserve a conversational answer rather than a row-count template.
+ACTIVITY_RE = re.compile(
+    r"\b(book\w*|trip\w*|revenue\w*|profit\w*|reservation\w*|reserv\w*|"
+    r"spend\w*|spent|earn\w*|churn\w*|inactive|silent|lapsed|"
+    r"month\w*|year\w*|quarter\w*|recent\w*|since|elite|last\s+(?:booked|connected))\b",
+    re.IGNORECASE,
+)
+
 
 def needs_analytical_answer(query: str, sql: str) -> bool:
-    return bool(ANALYTICAL_RE.search(query)) or "group by" in sql.lower()
+    return (bool(ANALYTICAL_RE.search(query)) or bool(ACTIVITY_RE.search(query))
+            or "group by" in sql.lower())
 
 
 def template_answer(rows: list, columns: list) -> str:
@@ -440,10 +610,12 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str,
     ]
 
     # Instant path: plain name searches never need a model. Skip it when the
-    # client explicitly asks for AI (mode="ai"), for analytical questions, and
-    # for follow-up refinements that depend on conversation context.
+    # client explicitly asks for AI (mode="ai"), for analytical or booking-
+    # activity questions (the name index has no activity data), and for
+    # follow-up refinements that depend on conversation context.
     is_refinement = bool(history) and bool(REFINEMENT_RE.search(query))
-    if not force_ai and not needs_analytical_answer(query, "") and not is_refinement:
+    if (not force_ai and not needs_analytical_answer(query, "")
+            and not ACTIVITY_RE.search(query) and not is_refinement):
         hit = instant_search(query)
         if hit and hit["rows"]:
             wants_count = bool(re.search(r"\bhow many|count\b", query, re.IGNORECASE))
@@ -464,6 +636,9 @@ def run_pipeline(query: str, history: list, api_key: str, preferred_model: str,
                 "columns": hit["columns"],
                 "model_used": [],
             }
+
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured on the server.")
 
     plan_messages = (
         [{"role": "system", "content": SQL_SYSTEM_PROMPT}]
@@ -567,10 +742,9 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):  # noqa: N802 - Vercel convention
+        # No early key check: the instant path needs no key; run_pipeline
+        # raises a clear error if the AI path is reached without one.
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not api_key:
-            self._send(500, {"error": "OPENROUTER_API_KEY is not configured on the server."})
-            return
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")

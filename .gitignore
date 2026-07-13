@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .env
 .vercel/
+accounts.db*
+rawdata.csv
+search_index.pkl

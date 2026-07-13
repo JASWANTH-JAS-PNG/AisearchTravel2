@@ -109,6 +109,54 @@
   #sugbox button .hint { color: var(--muted); font-size: 12px; margin-left: 8px; }
   #sugbox button.active, #sugbox button:hover { background: var(--panel2); }
   .qhint { color: var(--muted); font-size: 12.5px; margin: 4px 2px 12px; }
+  #qbadge {
+    display: none; align-items: center; gap: 7px; background: var(--panel2);
+    border: 1px solid var(--accent); border-radius: 10px; padding: 4px 12px;
+    font-size: 14px; white-space: nowrap;
+  }
+  #qbadge .lbl { color: var(--muted); font-size: 12px; }
+  #qbadge strong { color: #fff; }
+  #qresults tbody tr { cursor: pointer; }
+  #qresults tbody tr:hover td { background: var(--panel2); }
+
+  /* ---- Analytics ---- */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); gap: 8px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .lbl { font-size: 12px; color: var(--muted); }
+  .tile .val { font-size: 24px; font-weight: 600; color: #fff; margin-top: 2px; }
+  .tile .sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  .tile .delta { font-size: 12px; margin-top: 3px; font-weight: 600; }
+  .tile .delta.up { color: #0ca30c; }
+  .tile .delta.down { color: #d03b3b; }
+  .tile .delta.flat { color: var(--muted); }
+  .tile .delta .vs { color: var(--muted); font-weight: 400; }
+  .vgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; margin-top: 14px; }
+  .vcard { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+  .vcard.wide { grid-column: 1 / -1; }
+  .vcard h3 { font-size: 15px; font-weight: 600; }
+  .vcard .csub { font-size: 12px; color: var(--muted); margin: 1px 0 10px; }
+  .vcard svg { width: 100%; height: auto; display: block; cursor: pointer; }
+  .vcard .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--viz-sec, #c3c2b7); margin-bottom: 8px; align-items: center; }
+  .vcard .legend .key { display: inline-block; width: 14px; border-top: 3px solid; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .vcard .legrows { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; font-size: 13px; margin-top: 10px; }
+  .vcard .legrows .lr { display: flex; align-items: center; gap: 8px; }
+  .vcard .legrows .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .vcard .legrows .cnt { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .anfilter { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .anfilter button {
+    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 10px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+  }
+  .anfilter button.active { color: #fff; border-color: var(--accent); background: var(--panel2); }
+  .anfilter .flabel { color: var(--muted); font-size: 13px; align-self: center; margin-right: 2px; }
+  .viewdata { background: none; border: none; color: var(--accent); font-size: 13px; cursor: pointer; padding: 0; margin-top: 10px; }
+  #viztip { position: fixed; display: none; background: #26262f; border: 1px solid var(--border); border-radius: 8px;
+            padding: 8px 11px; font-size: 12.5px; pointer-events: none; z-index: 50; box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  #viztip .tt { color: var(--muted); font-size: 11.5px; margin-bottom: 4px; }
+  #viztip .trow { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
+  #viztip .tkey { width: 12px; border-top: 3px solid; border-radius: 2px; flex: none; }
+  #viztip .tval { font-weight: 600; color: #fff; }
+  #viztip .tname { color: #c3c2b7; }
   #qcount { font-size: 14px; margin: 10px 2px; color: var(--muted); }
   #qcount strong { color: var(--text); }
 </style>
@@ -117,12 +165,13 @@
 <div class="wrap">
   <header>
     <h1>🔎 AccountSearch AI</h1>
-    <span class="badge">500,000 accounts</span>
+    <span class="badge">500,000 accounts · 24 months of booking history</span>
   </header>
 
   <div class="tabs">
     <button id="tab-quick" class="active" type="button">⚡ Quick Search</button>
     <button id="tab-chat" type="button">🤖 AI Chat</button>
+    <button id="tab-analytics" type="button">📊 Analytics</button>
   </div>
 
   <!-- ================= Quick Search view ================= -->
@@ -133,8 +182,9 @@
         <div id="ghost"><span class="typed"></span><span class="rest"></span></div>
         <input id="qinput" placeholder="Type an account name… (typos ok)" autocomplete="off" spellcheck="false">
       </div>
+      <span id="qbadge"><span class="lbl">account_id</span><strong></strong></span>
     </div>
-    <div class="qhint">Instant, typo-tolerant matching over all account records — nothing sent to AI. Tab accepts the inline suggestion.</div>
+    <div class="qhint">Instant, typo-tolerant matching over all account records — nothing sent to AI. Tab accepts the inline suggestion; pick a name to see its account id.</div>
     <div id="qcount"></div>
     <div id="qresults"></div>
   </div>
@@ -144,6 +194,11 @@
     <div class="chips" id="chips"></div>
     <div id="chat"></div>
   </div>
+
+  <!-- ================= Analytics view ================= -->
+  <div id="view-analytics" class="view">
+    <div id="anbody"><div class="thinking">Loading analytics<span class="dots"></span></div></div>
+  </div>
 </div>
 
 <form class="inputbar" id="form" style="display:none">
@@ -151,16 +206,17 @@
     <input id="input" placeholder="Ask the AI about accounts…" autocomplete="off">
     <button id="send" type="submit">Send</button>
   </div>
-  <div class="note">AI understands full questions: filters, counts, comparisons, patterns. Answers come only from the 500,000-row dataset.</div>
+  <div class="note">AI understands full questions: bookings, revenue, profit, last-reservation gaps, counts, comparisons. Answers come only from the 500,000-account dataset (Jul 2024 – Jun 2026).</div>
 </form>
 
 <script>
 const EXAMPLES = [
+  "top 10 accounts by total revenue",
+  "when did Verizon Data Service last book a trip?",
+  "how many accounts haven't booked in 6+ months?",
+  "which accounts average 40+ trips a month?",
+  "compare total profit in 2025 vs 2024",
   "how many accounts have 'LLC' in the name?",
-  "accounts with account id over 400000",
-  "show me the accounts starting with \"A\"",
-  "compare how many names end in Inc vs LLC",
-  "what patterns do you see in bank-related names?",
 ];
 const chat = document.getElementById("chat");
 const form = document.getElementById("form");
@@ -173,6 +229,7 @@ let busy = false;
 const views = {
   quick: [document.getElementById("view-quick"), document.getElementById("tab-quick")],
   chat: [document.getElementById("view-chat"), document.getElementById("tab-chat")],
+  analytics: [document.getElementById("view-analytics"), document.getElementById("tab-analytics")],
 };
 function showTab(which) {
   for (const [name, [view, tab]] of Object.entries(views)) {
@@ -180,10 +237,12 @@ function showTab(which) {
     tab.classList.toggle("active", name === which);
   }
   form.style.display = which === "chat" ? "" : "none";
-  (which === "chat" ? input : document.getElementById("qinput")).focus();
+  if (which === "analytics") ensureAnalytics();
+  else (which === "chat" ? input : document.getElementById("qinput")).focus();
 }
 views.quick[1].onclick = () => showTab("quick");
 views.chat[1].onclick = () => showTab("chat");
+views.analytics[1].onclick = () => showTab("analytics");
 
 // ---------------- shared helpers ----------------
 function el(tag, cls, text) {
@@ -223,19 +282,102 @@ function csvButton(columns, rows, fname) {
   return dl;
 }
 
-// ---------------- dataset (client-side copy for quick search) ----------------
-let NAMES = [];  // [{id, accountId, name, lower, words, skels}]
+// ---------------- dataset + typo index (client-side mirror of api/search.py) ----------------
+let NAMES = [];  // [{id, accountId, name, lower, norm, squash, words}]
+const VOCAB = new Map(), DELETES = new Map(), SKELS = new Map();
 const skel = s => s.replace(/[aeiou]+/g, "");
+const normText = (s, camel) => (camel ? s.replace(/(?<=[a-z])(?=[A-Z])/g, " ") : s)
+  .replace(/[’']/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").trim();
+const allowedDist = t => t.length < 5 ? 0 : t.length < 7 ? 1 : 2;
+
+function deletesOf(tok, d) {
+  const out = new Set([tok]);
+  let frontier = [tok];
+  for (let k = 0; k < d; k++) {
+    const nxt = [];
+    for (const t of frontier)
+      for (let i = 0; i < t.length; i++) {
+        const v = t.slice(0, i) + t.slice(i + 1);
+        if (!out.has(v)) { out.add(v); nxt.push(v); }
+      }
+    frontier = nxt;
+  }
+  return out;
+}
+
+function damerau(a, b, cap) {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev2 = null, prev = Array.from({length: b.length + 1}, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i]; let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur[j] = v; if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > cap) return cap + 1;
+    prev2 = prev; prev = cur;
+  }
+  return prev[b.length];
+}
+
+// Full typo cluster for a query token — same guards as the server: length-scaled
+// edit distance, same first letter, frequency sanity, skeleton rescue, cap 6.
+const expandCache = new Map();
+function expandToken(tok) {
+  if (expandCache.has(tok)) return expandCache.get(tok);
+  const known = VOCAB.has(tok);
+  const out = new Set(known ? [tok] : []);
+  const cap = allowedDist(tok);
+  const cands = new Set();
+  if (cap) for (const v of deletesOf(tok, cap)) (DELETES.get(v) || []).forEach(c => cands.add(c));
+  (SKELS.get(skel(tok)) || []).forEach(c => cands.add(c));
+  cands.delete(tok);
+  const sk = skel(tok), scored = [];
+  for (const c of cands) {
+    if (c[0] !== tok[0]) continue;
+    let d;
+    if (skel(c) === sk && Math.abs(c.length - tok.length) <= 3) d = 0;
+    else {
+      if (Math.abs(c.length - tok.length) > 2) continue;
+      d = damerau(tok, c, 2);
+      if (d > Math.min(cap, allowedDist(c))) continue;
+    }
+    if (known) {
+      const ft = VOCAB.get(tok), fc = VOCAB.get(c);
+      if (!(fc <= ft * 0.25 || fc >= ft * 4)) continue;
+    }
+    scored.push([d, -VOCAB.get(c), c]);
+  }
+  scored.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  scored.slice(0, 6).forEach(s => out.add(s[2]));
+  expandCache.set(tok, out);
+  return out;
+}
+
 fetch("Accounts-VadlamudiRamesh.csv").then(r => r.text()).then(t => {
   NAMES = t.split(/\r?\n/).map((line, idx) => {
     const m = line.replace(/^﻿/, "").match(/^(\d+),(?:"(.*)"|(.*))$/);
     if (!m) return null;
     const name = m[2] || m[3];
     if (!name) return null;
-    const lower = name.toLowerCase();
-    const words = lower.replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
-    return {id: idx + 1, accountId: m[1], name, lower, words, skels: words.map(skel)};
+    const norm = normText(name, true);
+    return {id: idx + 1, accountId: m[1], name, lower: name.toLowerCase(),
+            norm, squash: norm.replaceAll(" ", ""), words: norm.split(" ").filter(Boolean)};
   }).filter(Boolean);
+  for (const e of NAMES)
+    for (const w of new Set(e.words))
+      if (w.length > 1) VOCAB.set(w, (VOCAB.get(w) || 0) + 1);
+  for (const w of VOCAB.keys()) {
+    for (const v of deletesOf(w, allowedDist(w))) {
+      let arr = DELETES.get(v); if (!arr) DELETES.set(v, arr = []);
+      arr.push(w);
+    }
+    const sw = skel(w);
+    let sl = SKELS.get(sw); if (!sl) SKELS.set(sw, sl = []);
+    sl.push(w);
+  }
   runQuick();  // render initial state once data is ready
 }).catch(() => {});
 
@@ -246,35 +388,53 @@ const qresults = document.getElementById("qresults");
 const ghostTyped = document.querySelector("#ghost .typed");
 const ghostRest = document.querySelector("#ghost .rest");
 const sugbox = document.getElementById("sugbox");
+const qbadge = document.getElementById("qbadge");
+const qbadgeVal = qbadge.querySelector("strong");
 let sugs = [], activeSug = -1;
+let picked = null;    // the entry whose account_id is shown beside the textbox
+let ghostEntry = null; // entry backing the inline ghost completion
 
-function tokenMatches(entry, tok) {
-  if (entry.lower.includes(tok)) return 1;                    // substring
-  const ts = skel(tok);
-  for (let i = 0; i < entry.words.length; i++) {              // typo: consonant skeleton
-    if (entry.skels[i] === ts && entry.words[i][0] === tok[0]) return 2;
+function setPicked(entry) {
+  picked = entry || null;
+  if (picked) {
+    qbadgeVal.textContent = picked.accountId;
+    qbadge.style.display = "inline-flex";
+  } else {
+    qbadge.style.display = "none";
   }
-  return 0;
+}
+
+function pick(entry) {
+  qinput.value = entry.name;
+  setPicked(entry);
+  runQuick();
+  qinput.focus();
 }
 
 function quickMatch(q) {
   const ql = q.toLowerCase().trim();
-  const toks = ql.replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(t => t.length > 1);
-  if (!toks.length) return {matches: [], corrected: false};
-  const matches = []; let anyCorrected = false;
+  const toks = normText(q, false).split(/\s+/).filter(t => t.length > 1);
+  if (!toks.length) return {matches: []};
+  // each token -> {itself + its typo cluster}; exact term checked first so
+  // `corrected` is only flagged when the match came through a cluster sibling
+  const groups = toks.map(tok => ({tok, terms: [...expandToken(tok)].filter(t => t !== tok)}));
+  const matches = [];
   for (const entry of NAMES) {
     let ok = true, corrected = false;
-    for (const tok of toks) {
-      const m = tokenMatches(entry, tok);
-      if (!m) { ok = false; break; }
-      if (m === 2) corrected = true;
+    for (const g of groups) {
+      if (entry.norm.includes(g.tok) || entry.squash.includes(g.tok)) continue;
+      let hit = false;
+      for (const term of g.terms) {
+        if (entry.norm.includes(term) || entry.squash.includes(term)) { hit = true; break; }
+      }
+      if (!hit) { ok = false; break; }
+      corrected = true;
     }
     if (!ok) continue;
-    anyCorrected = anyCorrected || corrected;
     matches.push({entry, corrected, prefix: entry.lower.startsWith(ql)});
   }
   matches.sort((a, b) => (b.prefix - a.prefix) || (a.corrected - b.corrected) || (a.entry.name.length - b.entry.name.length));
-  return {matches, corrected: anyCorrected};
+  return {matches};
 }
 
 function clearSuggest() {
@@ -298,16 +458,18 @@ function runQuick() {
   }
   // ghost completion + suggestions
   const best = matches.find(s => s.prefix);
+  ghostEntry = null;
   if (best && !/\s$/.test(q)) {
     ghostTyped.textContent = q;
     ghostRest.textContent = best.entry.name.slice(q.length);
+    ghostEntry = best.entry;
   }
   sugs = matches.slice(0, 6);
   sugs.forEach(s => {
     const b = el("button", "", s.entry.name);
     b.type = "button";
     if (s.corrected) b.appendChild(el("span", "hint", "auto-corrected"));
-    b.onclick = () => { qinput.value = s.entry.name; runQuick(); qinput.focus(); };
+    b.onclick = () => pick(s.entry);
     sugbox.appendChild(b);
   });
   sugbox.style.display = "block";
@@ -317,29 +479,34 @@ function runQuick() {
   countEl.appendChild(document.createTextNode(` matching account${matches.length !== 1 ? "s" : ""}${matches.length > 100 ? " — showing the first 100" : ""}`));
   qcount.replaceChildren(countEl);
 
-  const rows = matches.slice(0, 100).map(m => [m.entry.id, m.entry.accountId, m.entry.name]);
-  qresults.appendChild(buildTable(["id", "account_id", "account_name"], rows));
-  const allRows = matches.map(m => [m.entry.id, m.entry.accountId, m.entry.name]);
-  qresults.appendChild(csvButton(["id", "account_id", "account_name"], allRows, "quicksearch_results.csv"));
+  const shown = matches.slice(0, 100);
+  qresults.appendChild(buildTable(["account_name"], shown.map(m => [m.entry.name])));
+  [...qresults.querySelectorAll("tbody tr")].forEach((tr, i) => {
+    tr.onclick = () => pick(shown[i].entry);
+  });
+  const allRows = matches.map(m => [m.entry.accountId, m.entry.name]);
+  qresults.appendChild(csvButton(["account_id", "account_name"], allRows, "quicksearch_results.csv"));
 }
 
 function highlightSug() {
   [...sugbox.children].forEach((b, i) => b.classList.toggle("active", i === activeSug));
 }
 
-qinput.addEventListener("input", runQuick);
+qinput.addEventListener("input", () => {
+  if (picked && qinput.value !== picked.name) setPicked(null);
+  runQuick();
+});
 qinput.addEventListener("keydown", (e) => {
-  if (e.key === "Tab" && ghostRest.textContent) {
+  if (e.key === "Tab" && ghostRest.textContent && ghostEntry) {
     e.preventDefault();
-    qinput.value = qinput.value + ghostRest.textContent;
-    runQuick();
+    pick(ghostEntry);
   } else if (e.key === "ArrowDown" && sugs.length) {
     e.preventDefault(); activeSug = (activeSug + 1) % sugs.length; highlightSug();
   } else if (e.key === "ArrowUp" && sugs.length) {
     e.preventDefault(); activeSug = (activeSug - 1 + sugs.length) % sugs.length; highlightSug();
   } else if (e.key === "Enter") {
     e.preventDefault();
-    if (activeSug >= 0) { qinput.value = sugs[activeSug].entry.name; runQuick(); }
+    if (activeSug >= 0) pick(sugs[activeSug].entry);
     else clearSuggestOnlyDropdown();
   } else if (e.key === "Escape") {
     clearSuggestOnlyDropdown();
@@ -444,7 +611,484 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-showTab("quick");
+// ---------------- Analytics ----------------
+// Palette: dataviz reference (dark mode), validated against this app's surface.
+const AV = {
+  s1: "#3987e5", s2: "#199e70",                                    // categorical slots 1-2
+  ord: ["#b7d3f6", "#86b6ef", "#5598e7", "#2a78d6", "#184f95"],    // ordinal blue ramp
+  grid: "#2c2c2a", axis: "#383835", muted: "#898781", sec: "#c3c2b7",
+  surface: "#1e1e26",
+};
+const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const monLabel = m => `${MN[+m.slice(5, 7) - 1]} ${m.slice(2, 4)}`;
+const fmtInt = n => Math.round(n).toLocaleString();
+function fmtCompact(n, money) {
+  const sign = n < 0 ? "-" : ""; n = Math.abs(n);
+  const u = n >= 999.5e6 ? [1e9, "B"] : n >= 999.5e3 ? [1e6, "M"] : n >= 1000 ? [1e3, "K"] : [1, ""];
+  const v = n / u[0];
+  return sign + (money ? "$" : "") + (v >= 100 || u[1] === "" ? Math.round(v).toLocaleString() : v.toFixed(1)) + u[1];
+}
+function niceTicks(max) {
+  const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => max / s <= 4.5);
+  const ticks = [];
+  for (let v = 0; v < max; v += step) ticks.push(v);
+  ticks.push(Math.ceil(max / step) * step);  // top tick always covers the max
+  return ticks;
+}
+const monthYear = m => `${MN[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
+function svgEl(tag, attrs) {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  return e;
+}
+
+const viztip = el("div"); viztip.id = "viztip"; document.body.appendChild(viztip);
+function showTip(x, y, title, rows) {
+  viztip.replaceChildren(el("div", "tt", title));
+  rows.forEach(r => {
+    const row = el("div", "trow");
+    if (r.color) { const k = el("span", "tkey"); k.style.borderTopColor = r.color; row.appendChild(k); }
+    row.appendChild(el("span", "tval", r.value));
+    if (r.name) row.appendChild(el("span", "tname", r.name));
+    viztip.appendChild(row);
+  });
+  viztip.style.display = "block";
+  const w = viztip.offsetWidth, h = viztip.offsetHeight;
+  viztip.style.left = Math.min(x + 14, window.innerWidth - w - 8) + "px";
+  viztip.style.top = Math.min(y + 12, window.innerHeight - h - 8) + "px";
+}
+const hideTip = () => { viztip.style.display = "none"; };
+
+// Line chart: crosshair snaps to nearest month; tooltip lists every series at that X.
+function lineChart({months, series, money}) {
+  const W = 640, H = 250, L = 52, R = 86, T = 14, B = 30, pw = W - L - R, ph = H - T - B;
+  const max = niceTicks(Math.max(...series.flatMap(s => s.values)));
+  const yMax = max[max.length - 1];
+  const X = i => L + (months.length === 1 ? pw / 2 : i * pw / (months.length - 1));
+  const Y = v => T + ph - (v / yMax) * ph;
+  const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, role: "img"});
+  max.forEach(v => {
+    svg.appendChild(svgEl("line", {x1: L, x2: L + pw, y1: Y(v), y2: Y(v), stroke: v === 0 ? AV.axis : AV.grid, "stroke-width": 1}));
+    const t = svgEl("text", {x: L - 8, y: Y(v) + 4, "text-anchor": "end", fill: AV.muted, "font-size": 11, style: "font-variant-numeric:tabular-nums"});
+    t.textContent = fmtCompact(v, money); svg.appendChild(t);
+  });
+  months.forEach((m, i) => {
+    if (i % 4 !== 0 && i !== months.length - 1) return;
+    const t = svgEl("text", {x: X(i), y: T + ph + 18, "text-anchor": "middle", fill: AV.muted, "font-size": 11});
+    t.textContent = monLabel(m); svg.appendChild(t);
+  });
+  series.forEach(s => {
+    const pts = s.values.map((v, i) => `${X(i)},${Y(v)}`).join(" ");
+    if (series.length === 1) {
+      svg.appendChild(svgEl("polygon", {points: `${L},${Y(0)} ${pts} ${X(months.length - 1)},${Y(0)}`, fill: s.color, opacity: .1}));
+    }
+    svg.appendChild(svgEl("polyline", {points: pts, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round"}));
+    const last = s.values[s.values.length - 1];
+    const lbl = svgEl("text", {x: L + pw + 10, y: Y(last) + 4, fill: AV.sec, "font-size": 11.5});
+    // multi-series: the legend carries names, so the end label is just the value
+    lbl.textContent = series.length === 1 ? `${fmtCompact(last, money)} ${s.name}` : fmtCompact(last, money);
+    svg.appendChild(lbl);
+  });
+  const cross = svgEl("line", {y1: T, y2: T + ph, stroke: AV.axis, "stroke-width": 1, visibility: "hidden"});
+  svg.appendChild(cross);
+  const dots = series.map(s => {
+    const d = svgEl("circle", {r: 4.5, fill: s.color, stroke: AV.surface, "stroke-width": 2, visibility: "hidden"});
+    svg.appendChild(d); return d;
+  });
+  const overlay = svgEl("rect", {x: L, y: T, width: pw, height: ph, fill: "transparent"});
+  overlay.addEventListener("pointermove", e => {
+    const box = svg.getBoundingClientRect();
+    const fx = (e.clientX - box.left) * W / box.width;
+    const i = Math.max(0, Math.min(months.length - 1, Math.round((fx - L) / (pw / (months.length - 1)))));
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+    series.forEach((s, k) => { dots[k].setAttribute("cx", X(i)); dots[k].setAttribute("cy", Y(s.values[i])); dots[k].setAttribute("visibility", "visible"); });
+    showTip(e.clientX, e.clientY, monthYear(months[i]),
+      series.map(s => ({color: s.color, value: money ? "$" + fmtInt(s.values[i]) : fmtInt(s.values[i]), name: s.name})));
+  });
+  overlay.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); hideTip(); });
+  svg.appendChild(overlay);
+  return svg;
+}
+
+// Column chart: <=24px columns, 4px rounded caps, value on the cap, per-mark hover.
+function colChart({labels, values, color, money, tipNames, onPick}) {
+  const W = 640, H = 240, L = 52, R = 12, T = 22, B = 30, pw = W - L - R, ph = H - T - B;
+  const ticks = niceTicks(Math.max(...values)); const yMax = ticks[ticks.length - 1];
+  const Y = v => T + ph - (v / yMax) * ph;
+  const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, role: "img"});
+  ticks.forEach(v => svg.appendChild(svgEl("line", {x1: L, x2: L + pw, y1: Y(v), y2: Y(v), stroke: v === 0 ? AV.axis : AV.grid, "stroke-width": 1})));
+  const band = pw / labels.length, bw = Math.min(24, band * .55);
+  labels.forEach((lab, i) => {
+    const cx = L + band * i + band / 2, h = ph * values[i] / yMax, r = Math.min(4, bw / 2, h);
+    const bar = svgEl("path", {d: `M${cx - bw / 2},${T + ph} v${-(h - r)} q0,${-r} ${r},${-r} h${bw - 2 * r} q${r},0 ${r},${r} v${h - r} z`, fill: color, tabindex: 0});
+    const show = e => {
+      bar.style.filter = "brightness(1.2)";
+      const p = e.clientX !== undefined ? e : bar.getBoundingClientRect();
+      showTip(p.clientX ?? p.x, p.clientY ?? p.y, tipNames ? tipNames[i] : lab, [{color, value: money ? "$" + fmtInt(values[i]) : fmtInt(values[i]), name: "accounts"}]);
+    };
+    const hide = () => { bar.style.filter = ""; hideTip(); };
+    bar.addEventListener("pointermove", show); bar.addEventListener("pointerleave", hide);
+    bar.addEventListener("focus", show); bar.addEventListener("blur", hide);
+    if (onPick) bar.addEventListener("click", e => { e.stopPropagation(); onPick(i); });
+    svg.appendChild(bar);
+    const cap = svgEl("text", {x: cx, y: Y(values[i]) - 6, "text-anchor": "middle", fill: AV.sec, "font-size": 11, style: "font-variant-numeric:tabular-nums"});
+    cap.textContent = fmtCompact(values[i], money); svg.appendChild(cap);
+    const xl = svgEl("text", {x: cx, y: T + ph + 18, "text-anchor": "middle", fill: AV.muted, "font-size": 11.5});
+    xl.textContent = lab; svg.appendChild(xl);
+  });
+  return svg;
+}
+
+// Horizontal bars: every bar direct-labeled at the tip, so no tick axis.
+function hbarChart({rows, color, money}) {
+  const W = 640, rowH = 30, L = 180, R = 70, T = 6, pw = W - L - R;
+  const H = T + rows.length * rowH + 8;
+  const max = Math.max(...rows.map(r => r.value));
+  const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, role: "img"});
+  svg.appendChild(svgEl("line", {x1: L, x2: L, y1: T, y2: T + rows.length * rowH, stroke: AV.axis, "stroke-width": 1}));
+  rows.forEach((r, i) => {
+    const y = T + i * rowH + rowH / 2, bw = Math.max(2, pw * r.value / max), bh = 14, rad = Math.min(4, bw);
+    const name = svgEl("text", {x: L - 10, y: y + 4, "text-anchor": "end", fill: AV.sec, "font-size": 12});
+    name.textContent = r.label.length > 24 ? r.label.slice(0, 23) + "…" : r.label; svg.appendChild(name);
+    const bar = svgEl("path", {d: `M${L},${y - bh / 2} h${bw - rad} q${rad},0 ${rad},${rad} v${bh - 2 * rad} q0,${rad} ${-rad},${rad} h${-(bw - rad)} z`, fill: color, tabindex: 0});
+    const show = e => {
+      bar.style.filter = "brightness(1.2)";
+      showTip(e.clientX ?? L, e.clientY ?? y, r.label, [{color, value: money ? "$" + fmtInt(r.value) : fmtInt(r.value), name: r.tipname || ""}]);
+    };
+    const hide = () => { bar.style.filter = ""; hideTip(); };
+    bar.addEventListener("pointermove", show); bar.addEventListener("pointerleave", hide);
+    bar.addEventListener("focus", show); bar.addEventListener("blur", hide);
+    svg.appendChild(bar);
+    const val = svgEl("text", {x: L + bw + 8, y: y + 4, fill: AV.sec, "font-size": 11.5, style: "font-variant-numeric:tabular-nums"});
+    val.textContent = fmtCompact(r.value, money); svg.appendChild(val);
+  });
+  return svg;
+}
+
+// Donut (part-to-whole, 5 ordered segments, ordinal ramp): 2px surface-gap strokes.
+function donutChart({slices, centerLabel, centerValue, onPick}) {
+  const S = 230, cx = S / 2, cy = S / 2, rO = 92, rI = 58;
+  const total = slices.reduce((a, s) => a + s.value, 0);
+  const svg = svgEl("svg", {viewBox: `0 0 ${S} ${S}`, role: "img", style: "max-width:230px;margin:0 auto"});
+  let a0 = -Math.PI / 2;
+  slices.forEach((s, si) => {
+    const a1 = a0 + 2 * Math.PI * s.value / total;
+    const large = (a1 - a0) > Math.PI ? 1 : 0;
+    const p = (r, a) => `${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`;
+    const path = svgEl("path", {
+      d: `M${p(rO, a0)} A${rO},${rO} 0 ${large} 1 ${p(rO, a1)} L${p(rI, a1)} A${rI},${rI} 0 ${large} 0 ${p(rI, a0)} z`,
+      fill: s.color, stroke: AV.surface, "stroke-width": 2, tabindex: 0,
+    });
+    const show = e => {
+      path.style.filter = "brightness(1.15)";
+      showTip(e.clientX ?? cx, e.clientY ?? cy, s.label,
+        [{color: s.color, value: fmtInt(s.value), name: `accounts · ${(100 * s.value / total).toFixed(1)}%`}]);
+    };
+    const hide = () => { path.style.filter = ""; hideTip(); };
+    path.addEventListener("pointermove", show); path.addEventListener("pointerleave", hide);
+    path.addEventListener("focus", show); path.addEventListener("blur", hide);
+    if (onPick) path.addEventListener("click", e => { e.stopPropagation(); onPick(si); });
+    svg.appendChild(path);
+    a0 = a1;
+  });
+  const cv = svgEl("text", {x: cx, y: cy - 1, "text-anchor": "middle", fill: "#fff", "font-size": 22, "font-weight": 600});
+  cv.textContent = centerValue; svg.appendChild(cv);
+  const cl = svgEl("text", {x: cx, y: cy + 17, "text-anchor": "middle", fill: AV.muted, "font-size": 11});
+  cl.textContent = centerLabel; svg.appendChild(cl);
+  return svg;
+}
+
+function vcard(title, sub, chartNode, legendNode, table, wide) {
+  const c = el("div", "vcard" + (wide ? " wide" : ""));
+  c.appendChild(el("h3", "", title));
+  c.appendChild(el("div", "csub", sub));
+  if (legendNode) c.appendChild(legendNode);
+  c.appendChild(chartNode);
+  const btn = el("button", "viewdata", "View data ▾");
+  btn.type = "button";
+  const box = el("div"); box.style.display = "none";
+  box.appendChild(buildTable(table.columns, table.rows));
+  box.appendChild(csvButton(table.columns, table.rows, table.fname));
+  const toggle = () => {
+    const open = box.style.display === "none";
+    box.style.display = open ? "" : "none";
+    btn.textContent = open ? "Hide data ▴" : "View data ▾";
+  };
+  btn.onclick = toggle;
+  chartNode.addEventListener("click", toggle);
+  c.append(btn, box);
+  return c;
+}
+
+function lineLegend(items) {
+  const lg = el("div", "legend");
+  items.forEach(it => {
+    const s = el("span");
+    const k = el("span", "key"); k.style.borderTopColor = it.color;
+    s.append(k, document.createTextNode(it.name));
+    lg.appendChild(s);
+  });
+  return lg;
+}
+
+// 100% stacked horizontal bars (accounts vs revenue share) with 2px surface gaps.
+function stackChart({rows, segs, onPick}) {
+  const W = 640, L = 86, R = 8, barH = 26, gapY = 18, T = 8;
+  const H = T + rows.length * (barH + gapY);
+  const svg = svgEl("svg", {viewBox: `0 0 ${W} ${H}`, role: "img"});
+  const inkFor = hex => {
+    const n = parseInt(hex.slice(1), 16);
+    const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+    return lum > 0.6 ? "#0b0b0b" : "#ffffff";
+  };
+  rows.forEach((row, ri) => {
+    const y = T + ri * (barH + gapY);
+    const lab = svgEl("text", {x: L - 10, y: y + barH / 2 + 4, "text-anchor": "end", fill: AV.sec, "font-size": 12});
+    lab.textContent = row.label; svg.appendChild(lab);
+    const total = row.values.reduce((a, b) => a + b, 0) || 1;
+    let x = L;
+    row.values.forEach((v, i) => {
+      const w = (W - L - R) * v / total;
+      if (w <= 0.5) return;
+      const rect = svgEl("rect", {x: x + 1, y, width: Math.max(0.5, w - 2), height: barH, rx: 3, fill: segs[i].color, tabindex: 0});
+      const pct = 100 * v / total;
+      const show = e => {
+        rect.style.filter = "brightness(1.15)";
+        showTip(e.clientX ?? x, e.clientY ?? y, segs[i].label,
+          [{color: segs[i].color, value: row.money ? "$" + fmtInt(v) : fmtInt(v), name: `${row.label.toLowerCase()} · ${pct.toFixed(1)}%`}]);
+      };
+      const hide = () => { rect.style.filter = ""; hideTip(); };
+      rect.addEventListener("pointermove", show); rect.addEventListener("pointerleave", hide);
+      rect.addEventListener("focus", show); rect.addEventListener("blur", hide);
+      if (onPick) rect.addEventListener("click", e => { e.stopPropagation(); onPick(i); });
+      svg.appendChild(rect);
+      if (w > 46) {
+        const t = svgEl("text", {x: x + w / 2, y: y + barH / 2 + 4, "text-anchor": "middle",
+                                 "font-size": 11, fill: inkFor(segs[i].color), "pointer-events": "none"});
+        t.textContent = pct.toFixed(0) + "%"; svg.appendChild(t);
+      }
+      x += w;
+    });
+  });
+  return svg;
+}
+
+function buildLegRows(items) {
+  const lg = el("div", "legrows");
+  items.forEach(it => {
+    const lr = el("div", "lr");
+    const sw = el("span", "sw"); sw.style.background = it.color;
+    lr.append(sw, el("span", "", it.label), el("span", "cnt", it.text));
+    lg.appendChild(lr);
+  });
+  return lg;
+}
+
+// Drill-down: clicking a donut slice / recency bar / mix segment reveals the
+// accounts inside that bucket (precomputed server-side, so this is instant).
+function showDrill(box, title, accounts, total) {
+  box.replaceChildren();
+  const head = el("div", "csub", `${title} — ${fmtInt(total)} accounts` +
+    (accounts.length ? ` · top ${accounts.length} by revenue` : ""));
+  head.style.marginTop = "10px";
+  box.appendChild(head);
+  if (accounts.length) {
+    const cols = ["account_id", "account_name", "revenue", "trips", "last_booked"];
+    box.appendChild(buildTable(cols, accounts.map(a => [a.account_id, a.name, "$" + fmtInt(a.revenue), a.bookings, a.last_booked])));
+    box.appendChild(csvButton(cols, accounts.map(a => [a.account_id, a.name, a.revenue, a.bookings, a.last_booked]), "bucket_accounts.csv"));
+  } else {
+    box.appendChild(el("div", "csub", "No booking activity in this bucket."));
+  }
+  box.style.display = "";
+}
+
+let anStarted = false, anLatest = null, anCurrentRange = "all", anContent = null;
+const anCache = new Map();
+const AN_RANGES = [["3", "Last 3 mo"], ["6", "Last 6 mo"], ["12", "Last 12 mo"], ["all", "All history"]];
+
+async function fetchAnalytics(rangeKey) {
+  if (anCache.has(rangeKey)) return anCache.get(rangeKey);
+  let url = "/api/analytics";
+  if (rangeKey !== "all" && anLatest) {
+    const s = +anLatest.slice(0, 4) * 12 + (+anLatest.slice(5, 7) - 1) - (+rangeKey - 1);
+    url += `?from=${String(Math.floor(s / 12)).padStart(4, "0")}-${String(s % 12 + 1).padStart(2, "0")}&to=${anLatest}`;
+  }
+  const resp = await fetch(url);
+  const d = await resp.json();
+  if (!resp.ok || d.error) throw new Error(d.error || `HTTP ${resp.status}`);
+  anCache.set(rangeKey, d);
+  return d;
+}
+
+async function setRange(key) {
+  if (key === anCurrentRange || !anContent) return;
+  anCurrentRange = key;
+  document.querySelectorAll(".anfilter button").forEach(b => b.classList.toggle("active", b.dataset.range === key));
+  anContent.style.opacity = ".45";  // hold the previous render while refetching
+  try {
+    renderAnalytics(await fetchAnalytics(key));
+  } catch (err) {
+    anContent.replaceChildren(el("div", "error", "⚠️ " + err.message));
+  }
+  anContent.style.opacity = "";
+}
+
+async function ensureAnalytics() {
+  if (anStarted) return;
+  anStarted = true;
+  const body = document.getElementById("anbody");
+  let d;
+  try {
+    d = await fetchAnalytics("all");
+  } catch (err) {
+    body.replaceChildren(el("div", "error", "⚠️ Analytics failed to load: " + err.message));
+    anStarted = false;
+    return;
+  }
+  anLatest = d.kpis.latest_month;
+  const bar = el("div", "anfilter");
+  bar.appendChild(el("span", "flabel", "Period:"));
+  AN_RANGES.forEach(([key, label]) => {
+    const b = el("button", key === "all" ? "active" : "", label);
+    b.type = "button"; b.dataset.range = key;
+    b.onclick = () => setRange(key);
+    bar.appendChild(b);
+  });
+  anContent = el("div");
+  body.replaceChildren(bar, anContent);
+  renderAnalytics(d);
+}
+
+function renderAnalytics(d) {
+  const body = anContent;
+  const k = d.kpis, mo = d.monthly;
+  const period = `${monthYear(k.first_month)} – ${monthYear(k.latest_month)}`;
+  body.replaceChildren();
+
+  // month-over-month delta vs the previous month (up = good for all three)
+  const monOnly = m => MN[+m.slice(5, 7) - 1];
+  const prevLabel = monOnly(mo.months[mo.months.length - 2]);
+  const mom = arr => {
+    const cur = arr[arr.length - 1], prev = arr[arr.length - 2];
+    if (!prev) return null;
+    const pct = 100 * (cur - prev) / prev;
+    return {pct, dir: Math.abs(pct) < 0.05 ? "flat" : pct > 0 ? "up" : "down"};
+  };
+  const tiles = el("div", "kpis");
+  [["Total revenue", fmtCompact(k.total_revenue, true), period, mom(mo.revenue)],
+   ["Total profit", fmtCompact(k.total_profit, true), `${(100 * k.total_profit / k.total_revenue).toFixed(1)}% margin`, mom(mo.profit)],
+   ["Trips booked", fmtCompact(k.total_bookings), period, mom(mo.bookings)],
+   ["Active accounts", fmtCompact(k.active_last_month), `booked in ${monthYear(k.latest_month)}`, mom(mo.active_accounts)],
+   ["Never booked", fmtCompact(k.never_booked), `of ${fmtInt(k.total_accounts)} accounts`, null],
+  ].forEach(([lbl, val, sub, dl]) => {
+    const t = el("div", "tile");
+    t.append(el("div", "lbl", lbl), el("div", "val", val));
+    if (dl) {
+      const arrow = dl.dir === "up" ? "▲" : dl.dir === "down" ? "▼" : "·";
+      const d = el("div", "delta " + dl.dir, `${arrow} ${Math.abs(dl.pct).toFixed(1)}% `);
+      d.appendChild(el("span", "vs", `${monOnly(k.latest_month)} vs ${prevLabel}`));
+      t.appendChild(d);
+    }
+    t.appendChild(el("div", "sub", sub));
+    tiles.appendChild(t);
+  });
+  body.appendChild(tiles);
+
+  const grid = el("div", "vgrid");
+  grid.appendChild(vcard("Trips booked per month", "All accounts · click the chart for the data",
+    lineChart({months: mo.months, series: [{name: "trips", color: AV.s1, values: mo.bookings}]}), null,
+    {columns: ["month", "trips_booked", "active_accounts"],
+     rows: mo.months.map((m, i) => [m, mo.bookings[i], mo.active_accounts[i]]), fname: "monthly_bookings.csv"}));
+
+  grid.appendChild(vcard("Revenue vs profit per month", "USD · both series share one axis",
+    lineChart({months: mo.months, money: true, series: [
+      {name: "revenue", color: AV.s1, values: mo.revenue},
+      {name: "profit", color: AV.s2, values: mo.profit}]}),
+    lineLegend([{name: "Revenue", color: AV.s1}, {name: "Profit", color: AV.s2}]),
+    {columns: ["month", "revenue", "profit"],
+     rows: mo.months.map((m, i) => [m, mo.revenue[i], mo.profit[i]]), fname: "monthly_revenue_profit.csv"}));
+
+  if (d.flow.months.length >= 2) {
+    grid.appendChild(vcard("New vs lost accounts per month", "New = first booking in period · Lost = no bookings since (3+ months silent)",
+      lineChart({months: d.flow.months, series: [
+        {name: "new", color: AV.s1, values: d.flow.new},
+        {name: "lost", color: "#e66767", values: d.flow.lost}]}),
+      lineLegend([{name: "New accounts", color: AV.s1}, {name: "Lost accounts", color: "#e66767"}]),
+      {columns: ["month", "new_accounts", "lost_accounts"],
+       rows: d.flow.months.map((m, i) => [m, d.flow.new[i], d.flow.lost[i]]), fname: "account_flow.csv"}, true));
+  }
+
+  const tierOrder = ["Never booked", "Occasional (<15/mo)", "Good (15–25/mo)", "Best (25–35/mo)", "Elite (35+/mo)"];
+  const segMap = Object.fromEntries(d.segments.map(s => [s.label, s]));
+  const segSlices = tierOrder.map((label, i) => {
+    const s = segMap[label] || {accounts: 0, revenue: 0, top: []};
+    return {label, value: s.accounts, revenue: s.revenue, top: s.top, color: AV.ord[i]};
+  });
+  const segTotal = segSlices.reduce((a, s) => a + s.value, 0);
+  const segDrill = el("div"); segDrill.style.display = "none";
+  const segCard = vcard("Customer segments", "By average trips per active month · click a slice for its accounts",
+    donutChart({slices: segSlices, centerValue: fmtCompact(k.total_accounts), centerLabel: "accounts",
+      onPick: i => showDrill(segDrill, segSlices[i].label, segSlices[i].top, segSlices[i].value)}), null,
+    {columns: ["segment", "accounts", "share_pct"],
+     rows: segSlices.map(s => [s.label, s.value, (100 * s.value / segTotal).toFixed(1)]), fname: "customer_segments.csv"});
+  segCard.insertBefore(buildLegRows(segSlices.map(s =>
+    ({color: s.color, label: s.label, text: `${fmtInt(s.value)} · ${(100 * s.value / segTotal).toFixed(1)}%`}))),
+    segCard.querySelector(".viewdata"));
+  segCard.appendChild(segDrill);
+  grid.appendChild(segCard);
+
+  const recDrill = el("div"); recDrill.style.display = "none";
+  const recCard = vcard("Booking recency", "Months since each account's last booking · click a bar for its accounts",
+    colChart({labels: ["0–1", "2–3", "4–6", "7–12", "13+", "Never"],
+      tipNames: d.recency.map(r => r.bucket),
+      values: d.recency.map(r => r.accounts), color: AV.s2,
+      onPick: i => showDrill(recDrill, d.recency[i].bucket, d.recency[i].top, d.recency[i].accounts)}), null,
+    {columns: ["months_since_last_booking", "accounts"],
+     rows: d.recency.map(r => [r.bucket, r.accounts]), fname: "booking_recency.csv"});
+  recCard.appendChild(recDrill);
+  grid.appendChild(recCard);
+
+  // Revenue mix: share of accounts vs share of revenue, same ordinal colors.
+  const mixDrill = el("div"); mixDrill.style.display = "none";
+  const totalRevAll = segSlices.reduce((a, s) => a + s.revenue, 0) || 1;
+  const mixCard = vcard("Where the revenue comes from",
+    `Top 1% of booking accounts = ${d.pareto.top1_pct}% of revenue · top 10% = ${d.pareto.top10_pct}% · click a band for its accounts`,
+    stackChart({segs: segSlices,
+      rows: [{label: "Accounts", values: segSlices.map(s => s.value)},
+             {label: "Revenue", money: true, values: segSlices.map(s => s.revenue)}],
+      onPick: i => showDrill(mixDrill, segSlices[i].label, segSlices[i].top, segSlices[i].value)}),
+    buildLegRows(segSlices.map(s =>
+      ({color: s.color, label: s.label, text: `${fmtCompact(s.revenue, true)} · ${(100 * s.revenue / totalRevAll).toFixed(1)}% of revenue`}))),
+    {columns: ["segment", "accounts", "accounts_pct", "revenue", "revenue_pct"],
+     rows: segSlices.map(s => [s.label, s.value, (100 * s.value / segTotal).toFixed(1),
+                               s.revenue, (100 * s.revenue / totalRevAll).toFixed(1)]),
+     fname: "revenue_mix.csv"}, true);
+  mixCard.appendChild(mixDrill);
+  grid.appendChild(mixCard);
+
+  // Churn risk is a ranked action list — a table IS the right form here.
+  const cr = el("div", "vcard wide");
+  cr.appendChild(el("h3", "", "⚠️ Churn risk — high-value accounts gone quiet"));
+  cr.appendChild(el("div", "csub", "Top 20 by lifetime revenue with no booking for 3+ months — worth a call"));
+  const crCols = ["account_id", "account_name", "lifetime_revenue", "trips", "last_booked", "months_silent"];
+  const crRows = d.churn_risk.map(a => [a.account_id, a.name, "$" + fmtInt(a.revenue), a.bookings, a.last_booked, a.months_silent]);
+  cr.appendChild(buildTable(crCols, crRows));
+  cr.appendChild(csvButton(crCols, d.churn_risk.map(a => [a.account_id, a.name, a.revenue, a.bookings, a.last_booked, a.months_silent]), "churn_risk.csv"));
+  grid.appendChild(cr);
+
+  grid.appendChild(vcard("Top 10 accounts by revenue", `Lifetime revenue, ${period} · hover a bar for detail`,
+    hbarChart({money: true, color: AV.s1, rows: d.top_accounts.map(a =>
+      ({label: a.name, value: a.revenue, tipname: `#${a.account_id} · ${fmtInt(a.bookings)} trips · last ${a.last_booked}`}))}), null,
+    {columns: ["account_id", "account_name", "revenue", "trips", "last_booked"],
+     rows: d.top_accounts.map(a => [a.account_id, a.name, a.revenue, a.bookings, a.last_booked]), fname: "top_accounts.csv"}, true));
+
+  body.appendChild(grid);
+}
+
+showTab(location.hash === "#analytics" ? "analytics" : location.hash === "#chat" ? "chat" : "quick");
+const preQ = new URLSearchParams(location.search).get("q");
+if (preQ) { showTab("quick"); qinput.value = preQ; }  // runQuick() fires after the CSV loads
 </script>
 </body>
 </html>
