@@ -5,3 +5,5 @@ __pycache__/
 accounts.db*
 rawdata.csv
 search_index.pkl
+.vercel
+.env*

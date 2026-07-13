@@ -1,0 +1,42 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both live copies of the app stay in sync on every push to main.
+          - project: aisearch-travel-2
+            project_id: prj_bV6Yo2odIZq3UgtWmYmFgiWrYZ2L
+          - project: aisearch-travel2
+            project_id: prj_PU6n9tczh0lOACGUNNfIuEvc016m
+    env:
+      VERCEL_ORG_ID: team_meRu6H6AxHdPvxK2plVRrKMk
+      VERCEL_PROJECT_ID: ${{ matrix.project_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Deploy ${{ matrix.project }} to production
+        run: vercel deploy --prod --yes --token "${{ secrets.VERCEL_TOKEN }}"
+
+      - name: Smoke-test deployment
+        run: |
+          sleep 10
+          url="https://${{ matrix.project }}.vercel.app/api/analytics?window=2026-04"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$url")
+          echo "$url -> HTTP $code"
+          test "$code" = "200"
