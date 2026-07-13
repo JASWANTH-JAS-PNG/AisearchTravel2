@@ -116,8 +116,20 @@ Rules:
   when both are needed). No INSERT/UPDATE/DELETE/DROP/ALTER/PRAGMA/ATTACH.
 - Exactly one statement, no semicolons. Subqueries, CTEs (WITH ... SELECT),
   JOINs, GROUP BY, HAVING, ORDER BY and aggregate functions are all allowed.
-- Quarter bucketing (SQLite has no QUARTER()): group by
-  substr(month,1,4) || '-Q' || ((CAST(substr(month,6,2) AS INTEGER) + 2) / 3).
+- Quarter bucketing (SQLite has no QUARTER()): sortable key
+  substr(month,1,4) || '-Q' || ((CAST(substr(month,6,2) AS INTEGER) + 2) / 3)
+  (e.g. '2025-Q1'). The data spans quarters 2024-Q3 through 2026-Q2.
+- PIVOT / cross-tab requests ("quarter wise", "month wise", "as columns",
+  "matrix", or any period-per-entity breakdown): return ONE ROW PER ENTITY and
+  ONE COLUMN PER PERIOD via conditional aggregation, columns in chronological
+  order, labelled like "Q1-2025". Example shape:
+    SELECT a.account_name,
+           ROUND(SUM(CASE WHEN m.month BETWEEN '2025-01' AND '2025-03' THEN m.revenue END), 2) AS "Q1-2025",
+           ROUND(SUM(CASE WHEN m.month BETWEEN '2025-04' AND '2025-06' THEN m.revenue END), 2) AS "Q2-2025"
+    FROM accounts a JOIN monthly_activity m ON m.account_id = a.account_id
+    WHERE ... GROUP BY a.account_id, a.account_name ORDER BY ... LIMIT 50
+  Prefer this pivoted shape whenever the user wants periods across specific
+  entities — it renders as the table they expect.
 - Add LIMIT 50 unless the query is a pure COUNT/aggregation.
 - For per-account rankings/aggregations ("top accounts by revenue"), GROUP BY the
   account, ORDER BY the aggregate, and still add LIMIT 50.
