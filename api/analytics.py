@@ -12,12 +12,16 @@ Pure aggregation over accounts.db — no AI calls. Results are cached per
 import json
 import re
 import sqlite3
+import sys
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-import _turso
+# Vercel's Python runtime imports the entrypoint without putting api/ on
+# sys.path, so sibling imports need it added explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _turso  # noqa: E402
 
 DB_CANDIDATES = [
     Path(__file__).resolve().parent.parent / "accounts.db",

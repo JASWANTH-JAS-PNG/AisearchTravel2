@@ -15,13 +15,17 @@ import os
 import pickle
 import re
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-import _turso
+# Vercel's Python runtime imports the entrypoint without putting api/ on
+# sys.path, so sibling imports need it added explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _turso  # noqa: E402
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Paid tier: fast, reliable, ~$0.00025/query at defaults. Override without a code
